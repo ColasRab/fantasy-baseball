@@ -58,6 +58,7 @@ export async function getSupabaseAuthUser() {
     id: data.user.id,
     email: data.user.email.toLowerCase(),
     name:
+      (data.user.user_metadata?.manager_name as string | undefined) ??
       (data.user.user_metadata?.full_name as string | undefined) ??
       (data.user.user_metadata?.name as string | undefined) ??
       data.user.email,
@@ -66,28 +67,52 @@ export async function getSupabaseAuthUser() {
   };
 }
 
-export async function signInWithGoogle() {
+export async function signInWithPassword(email: string, password: string) {
   const supabase = getSupabaseClient();
   if (!supabase) return { error: "Supabase env vars are not configured." };
-  const { error } = await supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: {
-      redirectTo: `${window.location.origin}/office`,
-    },
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
   });
-  return { error: error?.message };
+  if (error) return { error: error.message };
+  if (!data.user.email) return { error: "Supabase did not return an email for this user." };
+  return {
+    user: {
+      id: data.user.id,
+      email: data.user.email.toLowerCase(),
+      name:
+        (data.user.user_metadata?.manager_name as string | undefined) ??
+        (data.user.user_metadata?.name as string | undefined) ??
+        data.user.email,
+      provider: "supabase" as const,
+    },
+  };
 }
 
-export async function signInWithMagicLink(email: string) {
+export async function signUpWithPassword(email: string, password: string, managerName: string) {
   const supabase = getSupabaseClient();
   if (!supabase) return { error: "Supabase env vars are not configured." };
-  const { error } = await supabase.auth.signInWithOtp({
+  const { data, error } = await supabase.auth.signUp({
     email,
+    password,
     options: {
-      emailRedirectTo: `${window.location.origin}/office`,
+      data: {
+        manager_name: managerName,
+        name: managerName,
+      },
     },
   });
-  return { error: error?.message };
+  if (error) return { error: error.message };
+  if (!data.user?.email) return { error: "Check your email to confirm the account, then sign in." };
+  return {
+    user: {
+      id: data.user.id,
+      email: data.user.email.toLowerCase(),
+      name: managerName,
+      provider: "supabase" as const,
+    },
+    needsConfirmation: !data.session,
+  };
 }
 
 export async function signOutSupabase() {

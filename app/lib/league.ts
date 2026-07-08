@@ -54,6 +54,16 @@ export type Sponsor = {
   condition: string;
 };
 
+export type StaffRole = "scout" | "assistant" | "batting" | "pitching" | "head";
+
+export type StaffMember = {
+  role: StaffRole;
+  name: string;
+  salary: number;
+  rating: number;
+  specialty: string;
+};
+
 export type Team = {
   id: string;
   city: string;
@@ -76,6 +86,7 @@ export type Team = {
   facilities: Facilities;
   materials: Materials;
   sponsor?: Sponsor;
+  staff: Partial<Record<StaffRole, StaffMember>>;
   boardTarget: string;
   roster: Player[];
   lineup: Player[];
@@ -125,6 +136,25 @@ const teamStories = [
 const boardTargets = {
   Premier: ["Fight for the pennant", "Stay clear of relegation", "Build a playoff-grade roster", "Finish in the top half"],
   Challenger: ["Win promotion", "Make the promotion race", "Develop young talent", "Cut payroll without collapsing"],
+};
+
+const staffNames = [
+  "Perry Chalk",
+  "Mo Keene",
+  "Vince Lark",
+  "Eli Box",
+  "Tomas Vale",
+  "Nora Bell",
+  "Kit Sato",
+  "Jules Fisk",
+] as const;
+
+const staffSpecialties: Record<StaffRole, string[]> = {
+  scout: ["Finds cheap prospects", "Sharper stat reveals", "Better free-agent reports"],
+  assistant: ["Lineup recommendations", "Bullpen order planning", "Coach coordination"],
+  batting: ["Weekly hitter drills", "Slump detection", "Plate approach reports"],
+  pitching: ["Weekly pitcher drills", "Fatigue reads", "Rotation form reports"],
+  head: ["Gameplan recommendations", "Opponent prep", "Clubhouse direction"],
 };
 
 const signatureTechniques = [
@@ -177,6 +207,16 @@ function defaultMaterials(rng: Rng): Materials {
     lumber: 4 + Math.floor(rng() * 6),
     leather: 3 + Math.floor(rng() * 5),
     thread: 2 + Math.floor(rng() * 5),
+  };
+}
+
+function makeStaff(rng: Rng, role: StaffRole, salaryBase: number): StaffMember {
+  return {
+    role,
+    name: pick(rng, staffNames),
+    salary: Math.round((salaryBase + rng() * 180) / 10) * 10,
+    rating: rating(rng, 45, 84),
+    specialty: pick(rng, staffSpecialties[role]),
   };
 }
 
@@ -352,6 +392,14 @@ export function createLeague(seed = "night-ledger-1938"): League {
       facilities: defaultFacilities(rng, division),
       materials: defaultMaterials(rng),
       sponsor: rng() > 0.45 ? pick(rng, sponsorPool) : undefined,
+      staff:
+        division === "Premier"
+          ? {
+              assistant: makeStaff(rng, "assistant", 420),
+              scout: makeStaff(rng, "scout", 320),
+              head: makeStaff(rng, "head", 520),
+            }
+          : {},
       boardTarget: pick(rng, boardTargets[division]),
       roster,
       lineup,
@@ -386,5 +434,75 @@ export function createLeague(seed = "night-ledger-1938"): League {
     freeAgents,
     schedule,
     chronicle,
+  };
+}
+
+export function createExpansionTeam(seed: string, city: string, mascot: string): Team {
+  const rng = createRng(`expansion-${seed}-${city}-${mascot}`);
+  const usedNames = new Set<string>();
+  const cleanCity = city.trim() || "New Yard";
+  const cleanMascot = mascot.trim() || "Rookies";
+  const id = `user-${cleanCity}-${cleanMascot}`.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const hitterPositions = [...positions, "IF", "OF"];
+  const roster = [
+    ...hitterPositions.map((position, playerIndex) => makeBatter(rng, id, playerIndex, position, usedNames)),
+    ...Array.from({ length: 4 }, (_, pitcherIndex) => makePitcher(rng, id, pitcherIndex, usedNames)),
+  ].map((player) => ({
+    ...player,
+    salary: Math.max(80, Math.round(player.salary * 0.68)),
+    value: Math.max(120, Math.round(player.value * 0.62)),
+    morale: Math.max(35, player.morale - 8),
+  }));
+  const lineup = roster
+    .filter((player) => player.role === "batter")
+    .sort((left, right) => playerOverall(right) - playerOverall(left))
+    .slice(0, 9);
+  const rotation = roster
+    .filter((player) => player.role === "pitcher")
+    .sort((left, right) => playerOverall(right) - playerOverall(left));
+  const teamPayroll = payroll(roster);
+
+  return {
+    id,
+    city: cleanCity,
+    mascot: cleanMascot,
+    name: `${cleanCity} ${cleanMascot}`,
+    abbreviation: cleanMascot
+      .split(" ")
+      .map((part) => part[0])
+      .join("")
+      .slice(0, 3)
+      .toUpperCase() || "DM",
+    color: "#f2b04c",
+    accent: "#5eb7a8",
+    wins: 0,
+    losses: 0,
+    runsFor: 0,
+    runsAgainst: 0,
+    division: "Challenger",
+    cash: 2400,
+    wageBudget: Math.round(teamPayroll * 1.08),
+    payroll: teamPayroll,
+    fanSupport: 32,
+    stadium: 38,
+    chemistry: 48,
+    facilities: {
+      battingCages: 1,
+      bullpenMounds: 1,
+      weightRoom: 1,
+      filmRoom: 1,
+      recoveryWing: 1,
+    },
+    materials: {
+      lumber: 3,
+      leather: 2,
+      thread: 2,
+    },
+    staff: {},
+    boardTarget: "Survive the first season",
+    roster,
+    lineup,
+    rotation,
+    story: "a blank ledger, a cheap bus, and a division table that does not care about romance",
   };
 }
