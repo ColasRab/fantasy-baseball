@@ -93,6 +93,72 @@ h2 {
   font-size: 1rem;
 }
 
+.sidebar-club {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid rgba(240, 243, 232, 0.12);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.sidebar-club p,
+.sidebar-club span,
+.sidebar-club strong {
+  display: block;
+}
+
+.sidebar-club span {
+  color: var(--chalk-dim);
+  font-family: var(--mono-font);
+  font-size: 0.72rem;
+}
+
+.sidebar-ledger {
+  align-items: start;
+  margin-top: 6px;
+}
+
+.header-note {
+  margin: 10px 0 0;
+  color: var(--chalk-dim);
+  font-size: 0.94rem;
+}
+
+.inline-loading-card {
+  width: min(620px, 100%);
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid rgba(242, 176, 76, 0.24);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.skeleton-line {
+  width: 100%;
+  height: 14px;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.07), rgba(242, 176, 76, 0.18), rgba(255, 255, 255, 0.07));
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+.skeleton-line.short {
+  width: 62%;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
 .standings-list {
   display: grid;
   gap: 8px;
@@ -854,21 +920,43 @@ h3 {
 
 .mini-stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
   gap: 6px;
   margin-bottom: 12px;
   font-size: 0.78rem;
 }
 
-.mini-stats span {
+.abbrev-stat {
+  display: grid;
+  gap: 2px;
   padding: 7px;
   background: rgba(255, 255, 255, 0.045);
   color: var(--chalk-dim);
+  cursor: help;
+  outline: none;
 }
 
-.mini-stats strong {
-  display: block;
+.abbrev-stat strong {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
   color: var(--chalk);
+  font-family: var(--mono-font);
+}
+
+.abbrev-stat strong span {
+  color: var(--amber-soft);
+}
+
+.abbrev-stat small {
+  color: var(--chalk-dim);
+  font-family: var(--mono-font);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+}
+
+.abbrev-stat.is-open {
+  border: 1px solid rgba(242, 176, 76, 0.32);
 }
 
 .trait-row {
@@ -1259,7 +1347,7 @@ h3 {
   text-transform: uppercase;
 }
 
-.pool-section + .pool-section {
+.pool-section+.pool-section {
   margin-top: 16px;
 }
 
@@ -1474,6 +1562,7 @@ h3 {
   from {
     transform: translateX(20%);
   }
+
   to {
     transform: translateX(-100%);
   }
@@ -1825,9 +1914,11 @@ h3 {
   0% {
     transform: translate(-50%, -50%) scale(0.92);
   }
+
   55% {
     transform: translate(-50%, -50%) scale(1.07);
   }
+
   100% {
     transform: translate(-50%, -50%) scale(1);
   }
@@ -1837,6 +1928,7 @@ h3 {
   0% {
     background: rgba(216, 74, 58, 0.22);
   }
+
   100% {
     background: rgba(242, 176, 76, 0.08);
   }
@@ -1982,6 +2074,73 @@ meter {
   gap: 14px;
 }
 
+.league-view .stats-columns {
+  align-items: start;
+}
+
+.division-switcher {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.division-switcher button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(240, 243, 232, 0.14);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--chalk-dim);
+  cursor: pointer;
+}
+
+.division-switcher button.is-active {
+  border-color: rgba(242, 176, 76, 0.46);
+  background: rgba(242, 176, 76, 0.1);
+  color: var(--amber-soft);
+}
+
+.league-overview {
+  display: grid;
+  gap: 14px;
+}
+
+.league-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.league-tile {
+  display: grid;
+  gap: 5px;
+  min-height: 104px;
+  padding: 12px;
+  border: 1px solid rgba(240, 243, 232, 0.14);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--chalk);
+  text-align: left;
+  cursor: pointer;
+}
+
+.league-tile strong {
+  color: var(--amber-soft);
+  font-family: var(--display-font);
+  text-transform: uppercase;
+}
+
+.league-tile span,
+.league-tile small {
+  color: var(--chalk-dim);
+  font-family: var(--mono-font);
+  font-size: 0.72rem;
+}
+
+.league-tile.is-active {
+  border-color: rgba(242, 176, 76, 0.46);
+  background: rgba(242, 176, 76, 0.1);
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -2015,6 +2174,7 @@ meter {
 }
 
 @media (max-width: 720px) {
+
   .masthead,
   .section-title,
   .scoreboard-top {
