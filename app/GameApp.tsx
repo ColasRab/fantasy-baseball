@@ -76,14 +76,38 @@ type TeamSelection = {
 };
 
 type SelectionMap = Record<string, TeamSelection>;
+type StartingBudget = 100 | 500 | 1000;
+type SeasonState = {
+  season: number;
+  week: number;
+  seasonLength: number;
+  reputation: number;
+  phase: "season" | "offseason";
+  lastWeekSummary: string[];
+};
+
 type SavedGameState = {
   teams: Team[];
   freeAgents: Player[];
   selections: SelectionMap;
   ownedTeamId: string | null;
+  seasonState: SeasonState;
 };
 
-const saveKey = "diamond-manager-gm-state-v4";
+const saveKey = "diamond-manager-gm-state-v6";
+const startingBudgetOptions: Array<{ value: StartingBudget; label: string; description: string }> = [
+  { value: 100, label: "$100k", description: "Hard mode: bargain players, tiny gate, every wage matters." },
+  { value: 500, label: "$500k", description: "Balanced climb: enough room for one plan, not enough for mistakes." },
+  { value: 1000, label: "$1M", description: "Backed project: stronger start, higher expectations." },
+];
+const initialSeasonState: SeasonState = {
+  season: 1,
+  week: 1,
+  seasonLength: 12,
+  reputation: 18,
+  phase: "season",
+  lastWeekSummary: ["Create a club, sign staff, pick a sponsor, and survive the Challenger table."],
+};
 
 function profileSaveKey(user?: AuthUser | null) {
   return user?.email ? `${saveKey}:${user.email}` : `${saveKey}:guest`;
@@ -132,7 +156,15 @@ function withPayroll(team: Team): Team {
 }
 
 function money(value: number) {
+  if (Math.abs(value) >= 1000) {
+    const millions = value / 1000;
+    return `$${millions.toLocaleString(undefined, { maximumFractionDigits: millions >= 10 ? 1 : 2 })}M`;
+  }
   return `$${value.toLocaleString()}k`;
+}
+
+function lineRuns(line: BoxLine) {
+  return line.runs.reduce((sum, inning) => sum + inning, 0);
 }
 
 function avg(players: Player[], key: keyof Player) {
@@ -299,9 +331,10 @@ function Header({
   );
 }
 
-function CreateClubView({ onCreateTeam }: { onCreateTeam: (city: string, mascot: string) => void }) {
+function CreateClubView({ onCreateTeam }: { onCreateTeam: (city: string, mascot: string, budget: StartingBudget) => void }) {
   const [city, setCity] = useState("");
   const [mascot, setMascot] = useState("");
+  const [budget, setBudget] = useState<StartingBudget>(100);
 
   return (
     <main className="login-shell">
@@ -309,7 +342,7 @@ function CreateClubView({ onCreateTeam }: { onCreateTeam: (city: string, mascot:
         <p className="eyebrow">New save</p>
         <h1>Create Club</h1>
         <p className="team-story">
-          Start from the bottom of the Challenger division. You get a modest roster, no staff, a small budget, and a very patient bus driver.
+          Start from the bottom of the Challenger division. Choose the board budget first, then build around cheap contracts, no staff, and a very patient bus driver.
         </p>
         <div className="dev-login">
           <label htmlFor="club-city">Club City</label>
@@ -328,7 +361,20 @@ function CreateClubView({ onCreateTeam }: { onCreateTeam: (city: string, mascot:
             type="text"
             value={mascot}
           />
-          <button onClick={() => onCreateTeam(city, mascot)} type="button">Join Challenger Division</button>
+          <div className="budget-choice" role="radiogroup" aria-label="starting budget">
+            {startingBudgetOptions.map((option) => (
+              <button
+                className={budget === option.value ? "is-active" : ""}
+                key={option.value}
+                onClick={() => setBudget(option.value)}
+                type="button"
+              >
+                <strong>{option.label}</strong>
+                <span>{option.description}</span>
+              </button>
+            ))}
+          </div>
+          <button onClick={() => onCreateTeam(city, mascot, budget)} type="button">Join Challenger Division</button>
         </div>
       </section>
     </main>
@@ -1261,6 +1307,32 @@ function BaseballField({ game, event }: { game: ReturnType<typeof simulateGame>;
   );
 }
 
+function liveLineScore(game: ReturnType<typeof simulateGame>, eventIndex: number) {
+  const awayLine: BoxLine = { runs: Array.from({ length: 9 }, () => 0), hits: 0, errors: 0 };
+  const homeLine: BoxLine = { runs: Array.from({ length: 9 }, () => 0), hits: 0, errors: 0 };
+  let awayScore = 0;
+  let homeScore = 0;
+
+  game.events.slice(0, eventIndex + 1).forEach((event) => {
+    const inningIndex = Math.max(0, event.inning - 1);
+    while (awayLine.runs.length <= inningIndex) awayLine.runs.push(0);
+    while (homeLine.runs.length <= inningIndex) homeLine.runs.push(0);
+    const awayDelta = Math.max(0, event.awayScore - awayScore);
+    const homeDelta = Math.max(0, event.homeScore - homeScore);
+    awayLine.runs[inningIndex] += awayDelta;
+    homeLine.runs[inningIndex] += homeDelta;
+    const isHit = event.result === "1B" || event.result === "2B" || event.result === "3B" || event.result === "HR";
+    if (isHit && event.half === "top") awayLine.hits += 1;
+    if (isHit && event.half === "bottom") homeLine.hits += 1;
+    if (event.result === "E" && event.half === "top") homeLine.errors += 1;
+    if (event.result === "E" && event.half === "bottom") awayLine.errors += 1;
+    awayScore = event.awayScore;
+    homeScore = event.homeScore;
+  });
+
+  return { awayLine, homeLine };
+}
+
 function LineScore({ away, home, awayLine, homeLine }: { away: Team; home: Team; awayLine: BoxLine; homeLine: BoxLine }) {
   const innings = awayLine.runs.map((_, index) => index + 1);
   const total = (line: BoxLine) => line.runs.reduce((sum, run) => sum + run, 0);
@@ -1305,6 +1377,7 @@ function MatchView({
   onNext,
   onSkip,
   onReset,
+  onRecordWeek,
 }: {
   game: ReturnType<typeof simulateGame>;
   team: Team;
@@ -1312,6 +1385,7 @@ function MatchView({
   onNext: () => void;
   onSkip: () => void;
   onReset: () => void;
+  onRecordWeek: () => void;
 }) {
   const event = game.events[Math.min(eventIndex, game.events.length - 1)];
   const awayStarter = game.away.rotation[0];
@@ -1319,6 +1393,8 @@ function MatchView({
   const recentEvents = game.events.slice(Math.max(0, eventIndex - 4), eventIndex + 1).reverse();
   const headCoach = team.staff?.head;
   const headCoachPlan = headCoach ? gamePlanForTeam(team) : null;
+  const isComplete = eventIndex >= game.events.length - 1;
+  const liveLines = isComplete ? { awayLine: game.awayLine, homeLine: game.homeLine } : liveLineScore(game, eventIndex);
 
   return (
     <section className="view game-view">
@@ -1353,7 +1429,7 @@ function MatchView({
         </div>
 
         <div className="ticker" aria-label="scoreboard ticker">
-          <span>{event.ticker} / {game.headline} / {game.final} / {event.ticker}</span>
+          <span>{event.ticker} / {isComplete ? `${game.headline} / ${game.final}` : "Match in progress"} / {event.ticker}</span>
         </div>
 
         {headCoach && headCoachPlan ? (
@@ -1367,7 +1443,7 @@ function MatchView({
         <div className="game-grid">
           <BaseballField game={game} event={event} />
           <aside className="play-feed">
-            <LineScore away={game.away} home={game.home} awayLine={game.awayLine} homeLine={game.homeLine} />
+            <LineScore away={game.away} home={game.home} awayLine={liveLines.awayLine} homeLine={liveLines.homeLine} />
             <article className="play-card">
               <div className="result-light">{event.result}</div>
               <h3>{event.batter} vs. {event.pitcher}</h3>
@@ -1402,6 +1478,12 @@ function MatchView({
                 <RotateCcw size={17} />
                 <span>Reset</span>
               </button>
+              {isComplete ? (
+                <button onClick={onRecordWeek} type="button">
+                  <ListChecks size={17} />
+                  <span>Record Week</span>
+                </button>
+              ) : null}
             </div>
           </aside>
         </div>
@@ -1525,6 +1607,95 @@ function LeagueView({ teams }: { teams: Team[] }) {
   );
 }
 
+function SeasonView({
+  team,
+  teams,
+  seasonState,
+  nextGame,
+  canRecordWeek,
+  onAdvanceWeek,
+  onFinishSeason,
+}: {
+  team: Team;
+  teams: Team[];
+  seasonState: SeasonState;
+  nextGame: string;
+  canRecordWeek: boolean;
+  onAdvanceWeek: () => void;
+  onFinishSeason: () => void;
+}) {
+  const divisionTable = [...teams]
+    .filter((candidate) => candidate.division === team.division)
+    .sort((left, right) => right.wins - left.wins || left.losses - right.losses || right.runsFor - left.runsFor);
+  const rank = divisionTable.findIndex((candidate) => candidate.id === team.id) + 1;
+  const seasonReady = seasonState.week > seasonState.seasonLength;
+
+  return (
+    <section className="view season-view">
+      <div className="section-title">
+        <div>
+          <p className="eyebrow">Club calendar</p>
+          <h2>Season {seasonState.season}, Week {Math.min(seasonState.week, seasonState.seasonLength)}</h2>
+        </div>
+        <StatPill label="Reputation" value={seasonState.reputation} />
+      </div>
+
+      <div className="season-board">
+        <section className="office-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Next decision</p>
+              <h3>{nextGame}</h3>
+            </div>
+            <CalendarDays size={20} />
+          </div>
+          <p className="team-story">
+            Each week resolves the league match, pays wages, adds gate income, checks sponsor bonuses, and moves the table.
+          </p>
+          <div className="office-actions">
+            <button disabled={seasonReady} onClick={onAdvanceWeek} type="button">{canRecordWeek ? "Record Week Result" : "Watch Match"}</button>
+            <button disabled={!seasonReady} onClick={onFinishSeason} type="button">Resolve Promotion</button>
+          </div>
+        </section>
+
+        <section className="office-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Table pressure</p>
+              <h3>{team.division}</h3>
+            </div>
+            <Trophy size={20} />
+          </div>
+          <div className="finance-lines">
+            <span>Position <strong>#{rank || "-"}</strong></span>
+            <span>Record <strong>{team.wins}-{team.losses}</strong></span>
+            <span>Goal <strong>{team.division === "Challenger" ? "Top club promotes" : "Bottom club relegates"}</strong></span>
+            <span>Cash <strong>{money(team.cash)}</strong></span>
+          </div>
+        </section>
+
+        <section className="office-panel season-log">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Front office log</p>
+              <h3>Weekly Report</h3>
+            </div>
+            <BookOpen size={20} />
+          </div>
+          <div className="compact-list">
+            {seasonState.lastWeekSummary.map((line, index) => (
+              <div className="staff-slot" key={`${line}-${index}`}>
+                <span>Report {index + 1}</span>
+                <strong>{line}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
 function loadSavedState(user?: AuthUser | null): SavedGameState | null {
   if (typeof window === "undefined") return null;
   try {
@@ -1547,6 +1718,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   const [freeAgents, setFreeAgents] = useState<Player[]>(() => initialSaved?.freeAgents ?? league.freeAgents);
   const [selections, setSelections] = useState<SelectionMap>(() => initialSaved?.selections ?? defaultSelections(league.teams));
   const [ownedTeamId, setOwnedTeamId] = useState<string | null>(() => initialSaved?.ownedTeamId ?? null);
+  const [seasonState, setSeasonState] = useState<SeasonState>(() => initialSaved?.seasonState ?? initialSeasonState);
   const managedTeams = useMemo(
     () => teams.map((team) => applySelection(team, selections[team.id])),
     [teams, selections],
@@ -1600,6 +1772,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
         setFreeAgents(remoteSave.freeAgents as Player[]);
         setSelections(remoteSave.selections as SelectionMap);
         setOwnedTeamId(remoteSave.ownedTeamId ?? null);
+        setSeasonState((remoteSave.seasonState as SeasonState | undefined) ?? initialSeasonState);
       } else {
         const localSave = loadSavedState(remoteUser);
         if (localSave) {
@@ -1607,6 +1780,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
           setFreeAgents(localSave.freeAgents);
           setSelections(localSave.selections);
           setOwnedTeamId(localSave.ownedTeamId ?? null);
+          setSeasonState(localSave.seasonState ?? initialSeasonState);
         }
       }
       setHasHydratedRemote(true);
@@ -1614,15 +1788,21 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   }, []);
 
   useEffect(() => {
-    const saveData: SavedGameState = { teams, freeAgents, selections, ownedTeamId };
+    if (!authUser && hasHydratedRemote) {
+      window.location.href = "/login";
+    }
+  }, [authUser, hasHydratedRemote]);
+
+  useEffect(() => {
+    const saveData: SavedGameState = { teams, freeAgents, selections, ownedTeamId, seasonState };
     window.localStorage.setItem(profileSaveKey(authUser), JSON.stringify(saveData));
     if (authUser?.provider === "supabase" && authUser.id && hasHydratedRemote) {
       void saveRemoteSave(authUser, saveData);
     }
-  }, [authUser, freeAgents, hasHydratedRemote, ownedTeamId, selections, teams]);
+  }, [authUser, freeAgents, hasHydratedRemote, ownedTeamId, seasonState, selections, teams]);
 
   async function signOut() {
-    window.localStorage.setItem(profileSaveKey(authUser), JSON.stringify({ teams, freeAgents, selections, ownedTeamId }));
+    window.localStorage.setItem(profileSaveKey(authUser), JSON.stringify({ teams, freeAgents, selections, ownedTeamId, seasonState }));
     await signOutSupabase();
     clearAuthUser();
     const guestSave = loadSavedState(null);
@@ -1631,10 +1811,11 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     setFreeAgents(guestSave?.freeAgents ?? league.freeAgents);
     setSelections(guestSave?.selections ?? defaultSelections(league.teams));
     setOwnedTeamId(guestSave?.ownedTeamId ?? null);
+    setSeasonState(guestSave?.seasonState ?? initialSeasonState);
   }
 
-  function createOwnedTeam(city: string, mascot: string) {
-    const team = createExpansionTeam(authUser?.email ?? "guest", city, mascot);
+  function createOwnedTeam(city: string, mascot: string, budget: StartingBudget) {
+    const team = createExpansionTeam(authUser?.email ?? "guest", city, mascot, budget);
     setTeams((current) => [team, ...current.filter((candidate) => candidate.id !== team.id)]);
     setSelections((current) => ({
       ...current,
@@ -1645,6 +1826,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     }));
     setOwnedTeamId(team.id);
     setSelectedTeamId(team.id);
+    setSeasonState(initialSeasonState);
     setActiveTab("office");
   }
 
@@ -1991,6 +2173,116 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     );
   }
 
+  function advanceLeagueWeek() {
+    if (seasonState.week > seasonState.seasonLength) return;
+    if (eventIndex < game.events.length - 1) {
+      setActiveTab("match");
+      window.history.pushState(null, "", "/match");
+      return;
+    }
+    const awayRuns = lineRuns(game.awayLine);
+    const homeRuns = lineRuns(game.homeLine);
+    const userIsAway = game.away.id === selectedTeam.id;
+    const userRuns = userIsAway ? awayRuns : homeRuns;
+    const opponentRuns = userIsAway ? homeRuns : awayRuns;
+    const opponentTeam = userIsAway ? game.home : game.away;
+    const won = userRuns > opponentRuns;
+    const gateIncome = 180 + Math.round(selectedTeam.fanSupport * 4) + (won ? 90 : 25);
+    const sponsorBonus = selectedTeam.sponsor && won ? selectedTeam.sponsor.bonus : 0;
+    const payrollBill = Math.max(120, Math.round(selectedTeam.payroll * 0.1));
+    const net = gateIncome + sponsorBonus - payrollBill;
+
+    setTeams((current) =>
+      current.map((candidate) => {
+        if (candidate.id === selectedTeam.id) {
+          return {
+            ...candidate,
+            wins: candidate.wins + (won ? 1 : 0),
+            losses: candidate.losses + (won ? 0 : 1),
+            runsFor: candidate.runsFor + userRuns,
+            runsAgainst: candidate.runsAgainst + opponentRuns,
+            cash: candidate.cash + net,
+            fanSupport: Math.max(1, Math.min(99, candidate.fanSupport + (won ? 2 : -1))),
+            chemistry: Math.max(1, Math.min(99, candidate.chemistry + (won ? 1 : -1))),
+            roster: candidate.roster.map((player) => ({
+              ...player,
+              fatigue: Math.min(99, player.fatigue + (candidate.lineup.some((picked) => picked.id === player.id) ? 4 : 1)),
+              morale: Math.max(1, Math.min(99, player.morale + (won ? 2 : -2))),
+            })),
+          };
+        }
+        if (candidate.id === opponentTeam.id) {
+          return {
+            ...candidate,
+            wins: candidate.wins + (won ? 0 : 1),
+            losses: candidate.losses + (won ? 1 : 0),
+            runsFor: candidate.runsFor + opponentRuns,
+            runsAgainst: candidate.runsAgainst + userRuns,
+          };
+        }
+        return candidate;
+      }),
+    );
+
+    setSeasonState((current) => ({
+      ...current,
+      week: current.week + 1,
+      reputation: Math.max(1, current.reputation + (won ? 2 : -1)),
+      lastWeekSummary: [
+        `${selectedTeam.abbreviation} ${userRuns}, ${opponentTeam.abbreviation} ${opponentRuns}: ${won ? "win" : "loss"}.`,
+        `Gate ${money(gateIncome)} + sponsor ${money(sponsorBonus)} - payroll ${money(payrollBill)} = ${money(net)}.`,
+        won ? "Board confidence rises; fan support ticks upward." : "Board pressure rises; morale needs attention.",
+      ],
+    }));
+    setGameIndex((current) => current + 1);
+    setEventIndex(0);
+    setActiveTab("season");
+    window.history.pushState(null, "", "/season");
+  }
+
+  function finishSeason() {
+    if (seasonState.week <= seasonState.seasonLength) return;
+    const divisionTeams = [...managedTeams]
+      .filter((team) => team.division === selectedTeam.division)
+      .sort((left, right) => right.wins - left.wins || left.losses - right.losses || right.runsFor - left.runsFor);
+    const rank = divisionTeams.findIndex((team) => team.id === selectedTeam.id) + 1;
+    const promotes = selectedTeam.division === "Challenger" && rank === 1;
+    const relegates = selectedTeam.division === "Premier" && rank === divisionTeams.length;
+    const nextDivision = promotes ? "Premier" : relegates ? "Challenger" : selectedTeam.division;
+
+    setTeams((current) =>
+      current.map((candidate) =>
+        candidate.id === selectedTeam.id
+          ? {
+              ...candidate,
+              division: nextDivision,
+              wins: 0,
+              losses: 0,
+              runsFor: 0,
+              runsAgainst: 0,
+              cash: candidate.cash + (promotes ? 1200 : relegates ? -500 : 350),
+              fanSupport: Math.max(1, Math.min(99, candidate.fanSupport + (promotes ? 8 : relegates ? -8 : 2))),
+              roster: candidate.roster.map((player) => ({ ...player, fatigue: Math.max(0, player.fatigue - 18) })),
+            }
+          : candidate,
+      ),
+    );
+    setSeasonState((current) => ({
+      season: current.season + 1,
+      week: 1,
+      seasonLength: current.seasonLength,
+      reputation: Math.max(1, current.reputation + (promotes ? 10 : relegates ? -10 : 3)),
+      phase: "season",
+      lastWeekSummary: [
+        promotes ? "Promotion secured. The club moves into Premier." : relegates ? "Relegation confirmed. The club drops into Challenger." : "Season complete. The board keeps the project alive.",
+        `Final table position: #${rank || "-"}. New target: ${nextDivision === "Premier" ? "survive the top division" : "fight for promotion"}.`,
+      ],
+    }));
+    setGameIndex(0);
+    setActiveTab("office");
+    window.history.pushState(null, "", "/office");
+  }
+
   function nextEvent() {
     setEventIndex((current) => Math.min(game.events.length - 1, current + 1));
   }
@@ -2008,6 +2300,18 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     setEventIndex(0);
     setActiveTab("match");
     window.history.pushState(null, "", "/match");
+  }
+
+  if (!authUser || !hasHydratedRemote) {
+    return (
+      <main className="login-shell">
+        <section className="login-panel">
+          <p className="eyebrow">Manager account</p>
+          <h1>Sign In Required</h1>
+          <p className="team-story">Opening the front office now starts from the login page so progress can bind to a manager profile.</p>
+        </section>
+      </main>
+    );
   }
 
   if (!ownedTeam) {
@@ -2106,15 +2410,25 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
           <SponsorsView team={selectedTeam} onAcceptSponsor={acceptSponsor} onMediaDay={mediaDay} />
         ) : null}
         {activeTab === "match" ? (
-          <MatchView game={game} team={selectedTeam} eventIndex={eventIndex} onNext={nextEvent} onSkip={skipGame} onReset={resetGame} />
+          <MatchView
+            game={game}
+            team={selectedTeam}
+            eventIndex={eventIndex}
+            onNext={nextEvent}
+            onRecordWeek={advanceLeagueWeek}
+            onReset={resetGame}
+            onSkip={skipGame}
+          />
         ) : null}
         {activeTab === "season" ? (
-          <OfficeView
+          <SeasonView
             team={selectedTeam}
+            teams={managedTeams}
+            seasonState={seasonState}
             nextGame={scheduled.label}
-            onAutoPick={autoPick}
-            onTrain={trainTeam}
-            onFacility={upgradeFacility}
+            canRecordWeek={eventIndex >= game.events.length - 1}
+            onAdvanceWeek={advanceLeagueWeek}
+            onFinishSeason={finishSeason}
           />
         ) : null}
         {activeTab === "news" ? <ChronicleView entries={league.chronicle} game={game} /> : null}

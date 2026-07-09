@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   getSupabaseAuthUser,
@@ -145,7 +144,6 @@ export default function LoginPage() {
         </div>
 
         {status ? <p className="login-status">{status}</p> : null}
-        <Link className="back-link" href="/office">Continue as guest</Link>
       </section>
     </main>
   );

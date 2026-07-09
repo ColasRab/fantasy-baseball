@@ -12,6 +12,12 @@ export type SavedGamePayload = {
   teams: unknown[];
   freeAgents: unknown[];
   selections: Record<string, unknown>;
+  ownedTeamId?: string | null;
+  seasonState?: {
+    season?: number;
+    week?: number;
+    reputation?: number;
+  };
 };
 
 const authKey = "diamond-manager-auth-user";
@@ -141,9 +147,19 @@ export async function saveRemoteSave(user: AuthUser, saveData: SavedGamePayload)
   if (!user.id) return;
   const supabase = getSupabaseClient();
   if (!supabase) return;
+  const ownedTeam = saveData.teams.find((team): team is { id: string; name?: string; division?: string; cash?: number } => {
+    return Boolean(team && typeof team === "object" && "id" in team && team.id === saveData.ownedTeamId);
+  });
   const { error } = await supabase.from("manager_saves").upsert({
     user_id: user.id,
     email: user.email,
+    manager_name: user.name,
+    owned_team_id: saveData.ownedTeamId,
+    club_name: ownedTeam?.name,
+    division: ownedTeam?.division,
+    season: saveData.seasonState?.season,
+    week: saveData.seasonState?.week,
+    reputation: saveData.seasonState?.reputation,
     save_data: saveData,
     updated_at: new Date().toISOString(),
   });
