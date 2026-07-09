@@ -1872,12 +1872,12 @@ function LeagueView({ teams, seasonState, team }: { teams: Team[]; seasonState: 
   ];
   const activeTileTeams = overviewTiles.find((tile) => tile.id === activeTile)?.teams ?? overviewTiles[0].teams;
   const activeDivisionTeams = divisions[activeDivision];
-
-  function moveArrow(candidate: Team, index: number, list: Team[]) {
-    if (candidate.division === "Premier" && index === list.length - 1) return "▼";
-    if (candidate.division === "Challenger" && index === 0) return "▲";
+  const divisionOrder: Array<Team["division"]> = team.division === "Premier" ? ["Premier", "Challenger"] : ["Challenger", "Premier"];
+  const moveStatus = (candidate: Team, index: number, list: Team[]) => {
+    if (candidate.division === "Premier" && index === list.length - 1) return "Relegation";
+    if (candidate.division === "Challenger" && index === 0) return "Promotion";
     return "";
-  }
+  };
 
   function renderStandingsTable(list: Team[], caption: string) {
     return (
@@ -1896,14 +1896,14 @@ function LeagueView({ teams, seasonState, team }: { teams: Team[]; seasonState: 
         </thead>
         <tbody>
           {list.map((candidate, index) => (
-            <tr key={candidate.id}>
+            <tr className={candidate.id === team.id ? "is-user-team" : ""} key={candidate.id}>
               <th>{candidate.name}</th>
               <td>{teamOverall(candidate)}</td>
               <td>{candidate.wins}</td>
               <td>{candidate.losses}</td>
               <td>{candidate.runsFor}</td>
               <td>{candidate.runsAgainst}</td>
-              <td>{moveArrow(candidate, index, list)}</td>
+              <td>{moveStatus(candidate, index, list)}</td>
             </tr>
           ))}
         </tbody>
@@ -1936,8 +1936,8 @@ function LeagueView({ teams, seasonState, team }: { teams: Team[]; seasonState: 
                   <strong>{tile.label}</strong>
                   <span>{tile.teams.length} clubs</span>
                   <small>
-                    {topTeam ? `${topTeam.name}${moveArrow(topTeam, 0, tile.teams)}` : "No clubs"}
-                    {bottomTeam && bottomTeam !== topTeam ? ` / ${bottomTeam.name}${moveArrow(bottomTeam, tile.teams.length - 1, tile.teams)}` : ""}
+                    {topTeam ? `${topTeam.name}${moveStatus(topTeam, 0, tile.teams) ? ` (${moveStatus(topTeam, 0, tile.teams)})` : ""}` : "No clubs"}
+                    {bottomTeam && bottomTeam !== topTeam ? ` / ${bottomTeam.name}${moveStatus(bottomTeam, tile.teams.length - 1, tile.teams) ? ` (${moveStatus(bottomTeam, tile.teams.length - 1, tile.teams)})` : ""}` : ""}
                   </small>
                 </button>
               );
@@ -1972,14 +1972,14 @@ function LeagueView({ teams, seasonState, team }: { teams: Team[]; seasonState: 
         <div className="stats-columns">
           <div>
             <div className="division-switcher">
-              {(Object.keys(divisions) as Array<Team["division"]>).map((division) => (
+              {divisionOrder.map((division) => (
                 <button
                   className={activeDivision === division ? "is-active" : ""}
                   key={division}
                   onClick={() => setActiveDivision(division)}
                   type="button"
                 >
-                  {division}
+                  {division}{division === team.division ? " / Your division" : ""}
                 </button>
               ))}
             </div>

@@ -53,9 +53,14 @@ button {
 .sidebar {
   position: sticky;
   top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   height: 100vh;
-  padding: 22px 16px;
-  background: #07130f;
+  padding: 18px 14px;
+  background:
+    linear-gradient(180deg, rgba(242, 176, 76, 0.05), transparent 26%),
+    #07130f;
   border-right: 1px solid var(--line);
   overflow-y: auto;
 }
@@ -68,7 +73,6 @@ button {
   border: 1px solid rgba(242, 176, 76, 0.34);
   background: rgba(242, 176, 76, 0.08);
   color: var(--amber-soft);
-  margin-bottom: 18px;
 }
 
 .league-plaque p,
@@ -98,7 +102,6 @@ h2 {
   grid-template-columns: 34px minmax(0, 1fr);
   gap: 12px;
   align-items: center;
-  margin-bottom: 12px;
   padding: 12px;
   border: 1px solid rgba(240, 243, 232, 0.12);
   background: rgba(255, 255, 255, 0.035);
@@ -117,8 +120,34 @@ h2 {
 }
 
 .sidebar-ledger {
+  grid-template-columns: 1fr;
   align-items: start;
-  margin-top: 6px;
+  margin-top: auto;
+  border-color: rgba(242, 176, 76, 0.2);
+  background: rgba(242, 176, 76, 0.055);
+}
+
+.side-nav {
+  display: grid;
+  gap: 6px;
+}
+
+.side-nav a {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  color: var(--chalk-dim);
+  text-decoration: none;
+}
+
+.side-nav a:hover,
+.side-nav a.is-active {
+  border-color: rgba(242, 176, 76, 0.44);
+  background: rgba(242, 176, 76, 0.1);
+  color: var(--amber-soft);
 }
 
 .header-note {
@@ -491,15 +520,7 @@ h3 {
   margin-top: 12px;
 }
 
-.tabs {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.tabs a,
-.controls button,
-.schedule-ribbon button {
+.controls button {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.04);
   color: var(--chalk);
@@ -507,27 +528,10 @@ h3 {
   text-decoration: none;
 }
 
-.tabs a {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  min-height: 42px;
-  padding: 0 13px;
-}
-
-.tabs a.is-active,
-.controls button:hover,
-.schedule-ribbon button.is-active {
+.controls button:hover {
   border-color: rgba(242, 176, 76, 0.55);
   background: rgba(242, 176, 76, 0.12);
   color: var(--amber-soft);
-}
-
-.schedule-ribbon {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(120px, 1fr)) 44px;
-  gap: 8px;
-  margin: 10px 0 18px;
 }
 
 .game-flow {
@@ -570,31 +574,6 @@ h3 {
   color: var(--chalk);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.schedule-ribbon button {
-  min-width: 0;
-  padding: 9px 10px;
-  text-align: left;
-}
-
-.schedule-ribbon span,
-.schedule-ribbon strong {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.schedule-ribbon span {
-  color: var(--chalk-dim);
-  font-family: var(--mono-font);
-  font-size: 0.68rem;
-}
-
-.next-game {
-  display: grid;
-  place-items: center;
 }
 
 .view {
@@ -846,7 +825,7 @@ h3 {
 
 .player-card {
   min-height: 292px;
-  padding: 14px;
+  padding: 14px 14px 56px;
   position: relative;
 }
 
@@ -920,7 +899,7 @@ h3 {
 
 .mini-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
   gap: 6px;
   margin-bottom: 12px;
   font-size: 0.78rem;
@@ -929,7 +908,8 @@ h3 {
 .abbrev-stat {
   display: grid;
   gap: 2px;
-  padding: 7px;
+  min-height: 52px;
+  padding: 7px 8px;
   background: rgba(255, 255, 255, 0.045);
   color: var(--chalk-dim);
   cursor: help;
@@ -982,8 +962,11 @@ h3 {
 
 .factor-list span {
   position: relative;
-  min-height: 18px;
-  padding: 3px 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+  padding: 4px 7px;
   overflow: hidden;
   border: 1px solid rgba(240, 243, 232, 0.1);
   color: var(--chalk-dim);
@@ -991,10 +974,21 @@ h3 {
   font-size: 0.66rem;
 }
 
+.factor-list em,
+.factor-list strong {
+  position: relative;
+  z-index: 1;
+  font-style: normal;
+}
+
+.factor-list strong {
+  color: var(--chalk);
+}
+
 .factor-list b {
   position: absolute;
   inset: 0 auto 0 0;
-  z-index: -1;
+  z-index: 0;
   display: block;
   background: linear-gradient(90deg, rgba(94, 183, 168, 0.32), rgba(242, 176, 76, 0.22));
 }
@@ -2107,7 +2101,7 @@ meter {
 
 .league-tile-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
 }
 
@@ -2139,6 +2133,14 @@ meter {
 .league-tile.is-active {
   border-color: rgba(242, 176, 76, 0.46);
   background: rgba(242, 176, 76, 0.1);
+}
+
+.ledger-table tr.is-user-team {
+  background: rgba(242, 176, 76, 0.1);
+}
+
+.ledger-table tr.is-user-team th {
+  color: var(--amber-soft);
 }
 
 @media (max-width: 980px) {
@@ -2189,18 +2191,8 @@ meter {
   .scout-grid,
   .team-summary,
   .manager-strip,
-  .standings-list,
-  .schedule-ribbon {
+  .standings-list {
     grid-template-columns: 1fr;
-  }
-
-  .tabs a {
-    flex: 1 1 142px;
-    justify-content: center;
-  }
-
-  .next-game {
-    min-height: 40px;
   }
 
   .diamond-wrap {
