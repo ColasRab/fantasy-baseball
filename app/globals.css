@@ -608,6 +608,103 @@ h3 {
   gap: 14px;
 }
 
+.office-home {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.25fr) minmax(300px, 0.8fr) minmax(230px, 0.55fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.ballpark-anchor {
+  position: relative;
+  min-height: 360px;
+  overflow: hidden;
+  border: 1px solid rgba(242, 176, 76, 0.26);
+  background:
+    radial-gradient(ellipse at 50% 92%, rgba(242, 176, 76, 0.28) 0 22%, transparent 23%),
+    radial-gradient(ellipse at 50% 72%, rgba(94, 183, 168, 0.16) 0 34%, transparent 35%),
+    linear-gradient(180deg, rgba(3, 10, 7, 0.96), rgba(10, 35, 24, 0.96));
+}
+
+.ballpark-anchor::before {
+  content: "";
+  position: absolute;
+  inset: 14% 8% auto;
+  height: 52%;
+  border-top: 3px solid rgba(240, 243, 232, 0.36);
+  border-radius: 50% 50% 0 0;
+}
+
+.pressbox-board {
+  position: absolute;
+  left: 18px;
+  top: 18px;
+  z-index: 2;
+  display: grid;
+  gap: 3px;
+  padding: 14px;
+  border: 1px solid rgba(242, 176, 76, 0.36);
+  background: rgba(2, 6, 4, 0.84);
+}
+
+.pressbox-board span,
+.pressbox-board small {
+  color: var(--chalk-dim);
+  font-family: var(--mono-font);
+  text-transform: uppercase;
+}
+
+.pressbox-board strong {
+  color: var(--amber-soft);
+  font-family: var(--display-font);
+  font-size: 1.6rem;
+}
+
+.clubhouse-rail {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.clubhouse-token {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(240, 243, 232, 0.14);
+  background: rgba(0, 0, 0, 0.36);
+}
+
+.clubhouse-token span {
+  display: block;
+  color: var(--chalk-dim);
+  font-family: var(--mono-font);
+  font-size: 0.68rem;
+}
+
+.clubhouse-token strong {
+  display: block;
+  overflow: hidden;
+  color: var(--chalk);
+  font-family: var(--display-font);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.decision-panel .primary-action {
+  min-height: 46px;
+  padding-inline: 18px;
+  border-color: rgba(216, 74, 58, 0.55);
+  background: rgba(216, 74, 58, 0.16);
+  color: #ffd6ce;
+}
+
+.office-summary {
+  grid-template-columns: 1fr;
+}
+
 .office-panel {
   min-width: 0;
   padding: 14px;
@@ -650,6 +747,15 @@ h3 {
   background: rgba(242, 176, 76, 0.09);
   color: var(--amber-soft);
   cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.office-actions button:active,
+.controls button:active,
+.compact-player:active,
+.scout-card:active,
+.facility-node:active {
+  transform: translateY(1px) scale(0.99);
 }
 
 .office-actions button {
@@ -920,6 +1026,102 @@ h3 {
 .staff-slot.is-filled {
   border-color: rgba(242, 176, 76, 0.34);
   background: rgba(242, 176, 76, 0.07);
+}
+
+.scout-status {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid rgba(94, 183, 168, 0.28);
+  background: rgba(94, 183, 168, 0.07);
+}
+
+.scout-status span,
+.scout-status small {
+  color: var(--chalk-dim);
+  font-family: var(--mono-font);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.scout-status strong {
+  color: var(--amber-soft);
+  font-family: var(--display-font);
+  font-size: 1.35rem;
+}
+
+.scout-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scout-card,
+.facility-node {
+  display: grid;
+  gap: 5px;
+  min-height: 112px;
+  padding: 10px;
+  border: 1px solid rgba(240, 243, 232, 0.13);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--chalk);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.scout-card strong,
+.facility-node strong {
+  color: var(--amber-soft);
+  font-family: var(--display-font);
+  text-transform: uppercase;
+}
+
+.scout-card span,
+.scout-card small,
+.facility-node span,
+.facility-node small {
+  color: var(--chalk-dim);
+  font-family: var(--mono-font);
+  font-size: 0.68rem;
+}
+
+.scout-card.is-locked,
+.facility-node.is-locked,
+.scout-card:disabled,
+.facility-node:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.facility-node.is-owned {
+  border-color: rgba(94, 183, 168, 0.42);
+  background: rgba(94, 183, 168, 0.08);
+}
+
+.empty-scouting {
+  padding: 14px;
+  border: 1px dashed rgba(240, 243, 232, 0.22);
+  color: var(--chalk-dim);
+  font-family: var(--serif-font);
+}
+
+.mini-feed {
+  margin-top: 12px;
+}
+
+.facility-tree-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.7fr) minmax(360px, 1.15fr) minmax(260px, 0.75fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.facility-node-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .season-board {
@@ -1407,6 +1609,7 @@ h3 {
   position: absolute;
   z-index: 5;
   transform: translate(-50%, -50%);
+  transition: left 260ms ease, top 260ms ease, transform 180ms ease, border-color 180ms ease, background 180ms ease;
 }
 
 .field-base {
@@ -1427,6 +1630,7 @@ h3 {
   background: rgba(242, 176, 76, 0.24);
   color: var(--amber-soft);
   box-shadow: 0 0 18px rgba(242, 176, 76, 0.22);
+  animation: basePulse 650ms ease;
 }
 
 .field-base strong {
@@ -1614,6 +1818,28 @@ h3 {
 .event-timeline article.is-current {
   border-color: rgba(242, 176, 76, 0.42);
   background: rgba(242, 176, 76, 0.08);
+  animation: feedFlash 650ms ease;
+}
+
+@keyframes basePulse {
+  0% {
+    transform: translate(-50%, -50%) scale(0.92);
+  }
+  55% {
+    transform: translate(-50%, -50%) scale(1.07);
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes feedFlash {
+  0% {
+    background: rgba(216, 74, 58, 0.22);
+  }
+  100% {
+    background: rgba(242, 176, 76, 0.08);
+  }
 }
 
 .event-timeline span,
@@ -1774,10 +2000,17 @@ meter {
   .game-flow,
   .game-brief,
   .office-grid,
+  .office-home,
+  .facility-tree-layout,
   .roster-workbench,
   .season-board,
   .stats-columns {
     grid-template-columns: 1fr;
+  }
+
+  .facility-node-grid,
+  .scout-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1791,6 +2024,9 @@ meter {
 
   .score-bug,
   .budget-choice,
+  .clubhouse-rail,
+  .facility-node-grid,
+  .scout-grid,
   .team-summary,
   .manager-strip,
   .standings-list,

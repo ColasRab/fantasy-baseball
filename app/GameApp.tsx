@@ -13,6 +13,7 @@ import {
   Handshake,
   ListChecks,
   Megaphone,
+  Pause,
   Play,
   Radio,
   RotateCcw,
@@ -47,19 +48,20 @@ import {
 } from "./lib/league";
 import { simulateGame, type BaseRunner, type BoxLine, type GameEvent } from "./lib/simulation";
 
-const tabs = [
+const appTabs = [
   { id: "office", label: "Office", icon: Building2, href: "/office" },
-  { id: "staff", label: "Staff", icon: Handshake, href: "/staff" },
+  { id: "staff", label: "Staff", icon: Handshake, href: "/staff", secondary: true },
   { id: "squad", label: "Squad", icon: ClipboardList, href: "/squad" },
-  { id: "training", label: "Training", icon: Dumbbell, href: "/training" },
-  { id: "market", label: "Market", icon: DollarSign, href: "/market" },
-  { id: "facilities", label: "Facilities", icon: Hammer, href: "/facilities" },
-  { id: "sponsors", label: "Sponsors", icon: Megaphone, href: "/sponsors" },
-  { id: "league", label: "League", icon: BarChart3, href: "/league" },
+  { id: "training", label: "Training", icon: Dumbbell, href: "/training", secondary: true },
+  { id: "market", label: "Scouting", icon: DollarSign, href: "/market" },
+  { id: "facilities", label: "Clubhouse", icon: Hammer, href: "/facilities" },
+  { id: "sponsors", label: "Sponsors", icon: Megaphone, href: "/sponsors", secondary: true },
   { id: "season", label: "Season", icon: CalendarDays, href: "/season" },
   { id: "match", label: "Match", icon: Radio, href: "/match" },
+  { id: "league", label: "League", icon: BarChart3, href: "/league" },
   { id: "news", label: "News", icon: BookOpen, href: "/news" },
 ] as const;
+const tabs = appTabs.filter((tab) => !("secondary" in tab));
 
 const staffMarket: StaffMember[] = [
   { role: "assistant", name: "Marta Keene", salary: 330, rating: 61, specialty: "Lineup recommendations" },
@@ -69,7 +71,58 @@ const staffMarket: StaffMember[] = [
   { role: "pitching", name: "Otto Fisk", salary: 390, rating: 65, specialty: "Weekly pitcher drills" },
 ];
 
-type TabId = (typeof tabs)[number]["id"];
+const facilityNodes = [
+  {
+    id: "scout-slot-2",
+    facility: "filmRoom",
+    level: 1,
+    name: "Second Scout Desk",
+    cost: 260,
+    effect: "Hold two discovered prospects before signing decisions.",
+  },
+  {
+    id: "veteran-scouting",
+    facility: "filmRoom",
+    level: 2,
+    name: "Veteran Files",
+    cost: 480,
+    effect: "Unlock veteran scouting focus with higher wages and steadier grades.",
+  },
+  {
+    id: "rising-star-scouting",
+    facility: "filmRoom",
+    level: 3,
+    name: "Rising Star Network",
+    cost: 760,
+    effect: "Unlock rare high-upside prospect searches.",
+  },
+  {
+    id: "sponsor-slot-2",
+    facility: "recoveryWing",
+    level: 2,
+    name: "Sponsor Liaison",
+    cost: 520,
+    effect: "Unlock expanded sponsor handling and stronger media-day income.",
+  },
+  {
+    id: "crafting-bench",
+    facility: "weightRoom",
+    level: 2,
+    name: "Equipment Bench",
+    cost: 460,
+    effect: "Unlock gear crafting instead of treating equipment as always available.",
+  },
+  {
+    id: "strategy-board",
+    facility: "bullpenMounds",
+    level: 3,
+    name: "Strategy Board",
+    cost: 720,
+    effect: "Unlock advanced gameplan preparation from the coaching staff.",
+  },
+] as const;
+
+type TabId = (typeof appTabs)[number]["id"];
 type TeamSelection = {
   lineupIds: string[];
   starterId: string;
@@ -77,6 +130,20 @@ type TeamSelection = {
 
 type SelectionMap = Record<string, TeamSelection>;
 type StartingBudget = 100 | 500 | 1000;
+type ScoutingFocus = "local" | "college" | "veteran" | "rising";
+type ScoutingReport = {
+  id: string;
+  focus: ScoutingFocus;
+  week: number;
+  summary: string;
+  foundIds: string[];
+};
+type ScoutingState = {
+  isSearching: boolean;
+  activeFocus: ScoutingFocus | null;
+  reports: ScoutingReport[];
+  foundIds: string[];
+};
 type SeasonState = {
   season: number;
   week: number;
@@ -92,6 +159,8 @@ type SavedGameState = {
   selections: SelectionMap;
   ownedTeamId: string | null;
   seasonState: SeasonState;
+  scoutingState?: ScoutingState;
+  purchasedUpgrades?: string[];
 };
 
 const saveKey = "diamond-manager-gm-state-v6";
@@ -107,6 +176,12 @@ const initialSeasonState: SeasonState = {
   reputation: 18,
   phase: "season",
   lastWeekSummary: ["Create a club, sign staff, pick a sponsor, and survive the Challenger table."],
+};
+const initialScoutingState: ScoutingState = {
+  isSearching: false,
+  activeFocus: null,
+  reports: [],
+  foundIds: [],
 };
 
 function profileSaveKey(user?: AuthUser | null) {
@@ -196,6 +271,10 @@ function gamePlanForTeam(team: Team) {
   if (speed >= power + 5) return "Pressure the defense with steals, hit-and-run calls, and contact-first counts.";
   if (eye >= 70) return "Work deep counts and force tired pitching before opening the power bats.";
   return "Balanced approach: steady starter, clean defense, and aggressive bench moves after the sixth.";
+}
+
+function hasUpgrade(purchasedUpgrades: string[], upgradeId: string) {
+  return purchasedUpgrades.includes(upgradeId);
 }
 
 function StatPill({ label, value }: { label: string; value: number | string }) {
@@ -484,14 +563,12 @@ function OfficeView({
   team,
   nextGame,
   onAutoPick,
-  onTrain,
-  onFacility,
+  onOpenSeason,
 }: {
   team: Team;
   nextGame: string;
   onAutoPick: (team: Team) => void;
-  onTrain: (team: Team) => void;
-  onFacility: (team: Team) => void;
+  onOpenSeason: () => void;
 }) {
   const wageRoom = team.wageBudget - team.payroll;
   const tableHint =
@@ -503,59 +580,59 @@ function OfficeView({
     <section className="view office-view">
       <div className="section-title">
         <div>
-          <p className="eyebrow">General manager desk</p>
-          <h2>{team.name}</h2>
+          <p className="eyebrow">Club home</p>
+          <h2>Press Box</h2>
         </div>
         <TeamMark team={team} />
       </div>
 
-      <div className="office-grid">
-        <div className="office-panel finance-board">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Club money</p>
-              <h3>Budget</h3>
-            </div>
-            <DollarSign size={20} />
+      <div className="office-home">
+        <section className="ballpark-anchor">
+          <div className="pressbox-board">
+            <span>{team.abbreviation}</span>
+            <strong>{team.name}</strong>
+            <small>{team.division} / {team.wins}-{team.losses}</small>
           </div>
-          <div className="finance-lines">
-            <span>Cash <strong>{money(team.cash)}</strong></span>
-            <span>Payroll <strong>{money(team.payroll)}</strong></span>
-            <span>Wage room <strong className={wageRoom < 0 ? "danger" : ""}>{money(wageRoom)}</strong></span>
-            <span>Fan support <strong>{team.fanSupport}</strong></span>
+          <div className="clubhouse-rail">
+            {team.lineup.slice(0, 5).map((player) => (
+              <div className="clubhouse-token" key={player.id}>
+                <span>{player.position}</span>
+                <strong>{player.name.split(" ").slice(-1)[0]}</strong>
+              </div>
+            ))}
           </div>
-        </div>
+        </section>
 
-        <div className="office-panel">
+        <section className="office-panel decision-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Board demand</p>
-              <h3>{team.boardTarget}</h3>
+              <p className="eyebrow">Next decision</p>
+              <h3>{nextGame}</h3>
             </div>
             <TrendingUp size={20} />
           </div>
-          <p className="team-story">{tableHint} Next fixture: {nextGame}.</p>
+          <p className="team-story">{tableHint} Board target: {team.boardTarget}.</p>
           <div className="office-actions">
+            <button className="primary-action" onClick={onOpenSeason} type="button">Proceed to Week</button>
             <button onClick={() => onAutoPick(team)} type="button">Set Best Lineup</button>
-            <button disabled={team.cash < 350} onClick={() => onTrain(team)} type="button">Train Squad - $350k</button>
-            <button disabled={team.cash < 700} onClick={() => onFacility(team)} type="button">Upgrade Facility - $700k</button>
           </div>
-        </div>
+        </section>
 
-        <div className="office-panel">
+        <aside className="office-panel compact-office-status">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Division status</p>
-              <h3>{team.division}</h3>
+              <p className="eyebrow">Status</p>
+              <h3>Ledger</h3>
             </div>
-            <Trophy size={20} />
+            <DollarSign size={20} />
           </div>
-          <div className="team-summary compact-summary">
+          <div className="team-summary compact-summary office-summary">
             <StatPill label="Overall" value={`${letterGrade(teamOverall(team))} ${teamOverall(team)}`} />
-            <StatPill label="Record" value={`${team.wins}-${team.losses}`} />
-            <StatPill label="Stadium" value={team.stadium} />
+            <StatPill label="Cash" value={money(team.cash)} />
+            <StatPill label="Wage Room" value={money(wageRoom)} />
+            <StatPill label="Fans" value={team.fanSupport} />
           </div>
-        </div>
+        </aside>
       </div>
     </section>
   );
@@ -696,11 +773,15 @@ function TrainingView({
 
 function FacilitiesView({
   team,
+  purchasedUpgrades,
   onUpgradeNamedFacility,
+  onPurchaseNode,
   onCraftGear,
 }: {
   team: Team;
+  purchasedUpgrades: string[];
   onUpgradeNamedFacility: (team: Team, facility: keyof Team["facilities"]) => void;
+  onPurchaseNode: (team: Team, nodeId: string) => void;
   onCraftGear: (team: Team, gear: "bats" | "gloves" | "cleats" | "uniforms") => void;
 }) {
   const facilities = [
@@ -720,12 +801,12 @@ function FacilitiesView({
         </div>
         <StatPill label="Materials" value={`${team.materials.lumber}/${team.materials.leather}/${team.materials.thread}`} />
       </div>
-      <div className="stats-columns">
-        <section className="pool-panel">
+      <div className="facility-tree-layout">
+        <section className="pool-panel facility-levels">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Permanent upgrades</p>
-              <h3>Facility Board</h3>
+              <p className="eyebrow">Facility levels</p>
+              <h3>Clubhouse Spine</h3>
             </div>
           </div>
           <div className="compact-list">
@@ -745,6 +826,34 @@ function FacilitiesView({
           </div>
         </section>
 
+        <section className="pool-panel facility-node-board">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Locked and unlocked perks</p>
+              <h3>Upgrade Grid</h3>
+            </div>
+          </div>
+          <div className="facility-node-grid">
+            {facilityNodes.map((node) => {
+              const unlocked = team.facilities[node.facility] >= node.level;
+              const purchased = hasUpgrade(purchasedUpgrades, node.id);
+              return (
+                <button
+                  className={`facility-node ${unlocked ? "is-unlocked" : "is-locked"} ${purchased ? "is-owned" : ""}`}
+                  disabled={!unlocked || purchased || team.cash < node.cost}
+                  key={node.id}
+                  onClick={() => onPurchaseNode(team, node.id)}
+                  type="button"
+                >
+                  <span>Lv {node.level}</span>
+                  <strong>{node.name}</strong>
+                  <small>{purchased ? "Purchased" : unlocked ? `${money(node.cost)} / ${node.effect}` : `Upgrade ${node.facility} to Lv ${node.level}`}</small>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         <section className="pool-panel">
           <div className="panel-heading">
             <div>
@@ -752,9 +861,18 @@ function FacilitiesView({
               <h3>Crafting Bench</h3>
             </div>
           </div>
+          {!hasUpgrade(purchasedUpgrades, "crafting-bench") ? (
+            <div className="empty-scouting">Locked. Purchase Equipment Bench in the facility grid.</div>
+          ) : null}
           <div className="compact-list">
             {(["bats", "gloves", "cleats", "uniforms"] as const).map((gear) => (
-              <button className="compact-player" key={gear} onClick={() => onCraftGear(team, gear)} type="button">
+              <button
+                className="compact-player"
+                disabled={!hasUpgrade(purchasedUpgrades, "crafting-bench")}
+                key={gear}
+                onClick={() => onCraftGear(team, gear)}
+                type="button"
+              >
                 <span className="compact-grade">
                   <strong>+1</strong>
                   {gear === "bats" ? "OFF" : gear === "gloves" ? "DEF" : gear === "cleats" ? "SPD" : "MOR"}
@@ -1145,23 +1263,38 @@ function SquadView({
 
 function MarketView({
   team,
-  freeAgents,
+  prospects,
+  scoutingState,
+  purchasedUpgrades,
+  seasonWeek,
+  onStartScouting,
   onSign,
   onRelease,
 }: {
   team: Team;
-  freeAgents: Player[];
+  prospects: Player[];
+  scoutingState: ScoutingState;
+  purchasedUpgrades: string[];
+  seasonWeek: number;
+  onStartScouting: (team: Team, focus: ScoutingFocus) => void;
   onSign: (player: Player) => void;
   onRelease: (team: Team, player: Player) => void;
 }) {
   const rosterByValue = [...team.roster].sort((left, right) => right.value - left.value).slice(0, 8);
+  const scoutSlots = hasUpgrade(purchasedUpgrades, "scout-slot-2") ? 2 : 1;
+  const focusOptions: Array<{ id: ScoutingFocus; label: string; cost: number; note: string; locked?: boolean }> = [
+    { id: "local", label: "Local Sandlots", cost: 80, note: "Cheap search; common depth pieces." },
+    { id: "college", label: "College Ledger", cost: 140, note: "Balanced odds for young prospects." },
+    { id: "veteran", label: "Veteran Files", cost: 260, note: "Steady players, higher wages.", locked: !hasUpgrade(purchasedUpgrades, "veteran-scouting") },
+    { id: "rising", label: "Rising Stars", cost: 420, note: "Rare high-upside finds.", locked: !hasUpgrade(purchasedUpgrades, "rising-star-scouting") },
+  ];
 
   return (
     <section className="view market-view">
       <div className="section-title">
         <div>
-          <p className="eyebrow">Transfers and contracts</p>
-          <h2>Market Office</h2>
+          <p className="eyebrow">Recruitment desk</p>
+          <h2>Scouting Office</h2>
         </div>
         <StatPill label="Cash" value={money(team.cash)} />
       </div>
@@ -1169,30 +1302,71 @@ function MarketView({
         <section className="pool-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Available players</p>
-              <h3>Transfer Market</h3>
+              <p className="eyebrow">Search actions</p>
+              <h3>Scout Network</h3>
+            </div>
+          </div>
+          <div className="scout-status">
+            <span>Report slots</span>
+            <strong>{scoutingState.foundIds.length}/{scoutSlots}</strong>
+            <small>{scoutingState.isSearching ? `Searching ${scoutingState.activeFocus} reports...` : "Commit cash to roll for 0-3 prospects."}</small>
+          </div>
+          <div className="scout-grid">
+            {focusOptions.map((focus) => (
+              <button
+                className={`scout-card ${focus.locked ? "is-locked" : ""}`}
+                disabled={Boolean(focus.locked) || scoutingState.isSearching || team.cash < focus.cost}
+                key={focus.id}
+                onClick={() => onStartScouting(team, focus.id)}
+                type="button"
+              >
+                <strong>{focus.label}</strong>
+                <span>{focus.note}</span>
+                <small>{focus.locked ? "Locked by Facilities" : `${money(focus.cost)} / resolves shortly`}</small>
+              </button>
+            ))}
+          </div>
+          <div className="chronicle-feed mini-feed">
+            {scoutingState.reports.slice(0, 3).map((report) => (
+              <article className="chronicle-entry" key={report.id}>
+                <span>W{report.week}</span>
+                <p>{report.summary}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="pool-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Discovered prospects</p>
+              <h3>Scouting Reports</h3>
             </div>
           </div>
           <div className="compact-list">
-            {freeAgents.map((player) => (
-              <button
-                className="compact-player"
-                disabled={team.cash < player.value || team.payroll + player.salary > team.wageBudget}
-                key={player.id}
-                onClick={() => onSign(player)}
-                type="button"
-              >
-                <span className="compact-grade">
-                  <strong>{letterGrade(playerOverall(player))}</strong>
-                  {playerOverall(player)}
-                </span>
-                <span className="compact-name">
-                  <strong>{player.name}</strong>
-                  <small>{player.position} / fee {money(player.value)} / wage {money(player.salary)}</small>
-                </span>
-                <span className="compact-action">Sign</span>
-              </button>
-            ))}
+            {prospects.length ? (
+              prospects.map((player) => (
+                <button
+                  className="compact-player"
+                  disabled={team.cash < player.value || team.payroll + player.salary > team.wageBudget}
+                  key={player.id}
+                  onClick={() => onSign(player)}
+                  type="button"
+                >
+                  <span className="compact-grade">
+                    <strong>{letterGrade(playerOverall(player))}</strong>
+                    {playerOverall(player)}
+                  </span>
+                  <span className="compact-name">
+                    <strong>{player.name}</strong>
+                    <small>{player.position} / fee {money(player.value)} / wage {money(player.salary)} / Week {seasonWeek}</small>
+                  </span>
+                  <span className="compact-action">Sign</span>
+                </button>
+              ))
+            ) : (
+              <div className="empty-scouting">No active prospect reports. Send scouts before signing.</div>
+            )}
           </div>
         </section>
 
@@ -1387,6 +1561,8 @@ function MatchView({
   onReset: () => void;
   onRecordWeek: () => void;
 }) {
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [simSpeed, setSimSpeed] = useState<1 | 2 | 4>(2);
   const event = game.events[Math.min(eventIndex, game.events.length - 1)];
   const awayStarter = game.away.rotation[0];
   const homeStarter = game.home.rotation[0];
@@ -1395,6 +1571,16 @@ function MatchView({
   const headCoachPlan = headCoach ? gamePlanForTeam(team) : null;
   const isComplete = eventIndex >= game.events.length - 1;
   const liveLines = isComplete ? { awayLine: game.awayLine, homeLine: game.homeLine } : liveLineScore(game, eventIndex);
+
+  useEffect(() => {
+    if (!isPlaying || isComplete) return;
+    const timer = window.setTimeout(onNext, simSpeed === 4 ? 220 : simSpeed === 2 ? 520 : 1050);
+    return () => window.clearTimeout(timer);
+  }, [isComplete, isPlaying, onNext, simSpeed, eventIndex]);
+
+  useEffect(() => {
+    if (isComplete) setIsPlaying(false);
+  }, [isComplete]);
 
   return (
     <section className="view game-view">
@@ -1466,9 +1652,20 @@ function MatchView({
               ))}
             </div>
             <div className="controls">
-              <button onClick={onNext} type="button">
-                <Play size={17} />
-                <span>Next</span>
+              <button onClick={() => setIsPlaying((current) => !current)} type="button">
+                {isPlaying ? <Pause size={17} /> : <Play size={17} />}
+                <span>{isPlaying ? "Pause" : "Play"}</span>
+              </button>
+              <button disabled={isComplete} onClick={onNext} type="button">
+                <SkipForward size={17} />
+                <span>Step</span>
+              </button>
+              <button
+                onClick={() => setSimSpeed((current) => (current === 1 ? 2 : current === 2 ? 4 : 1))}
+                type="button"
+              >
+                <Radio size={17} />
+                <span>{simSpeed}x</span>
               </button>
               <button onClick={onSkip} type="button">
                 <SkipForward size={17} />
@@ -1719,6 +1916,8 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   const [selections, setSelections] = useState<SelectionMap>(() => initialSaved?.selections ?? defaultSelections(league.teams));
   const [ownedTeamId, setOwnedTeamId] = useState<string | null>(() => initialSaved?.ownedTeamId ?? null);
   const [seasonState, setSeasonState] = useState<SeasonState>(() => initialSaved?.seasonState ?? initialSeasonState);
+  const [scoutingState, setScoutingState] = useState<ScoutingState>(() => initialSaved?.scoutingState ?? initialScoutingState);
+  const [purchasedUpgrades, setPurchasedUpgrades] = useState<string[]>(() => initialSaved?.purchasedUpgrades ?? []);
   const managedTeams = useMemo(
     () => teams.map((team) => applySelection(team, selections[team.id])),
     [teams, selections],
@@ -1761,6 +1960,20 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   useEffect(() => {
     getSupabaseAuthUser().then(async (remoteUser) => {
       if (!remoteUser) {
+        const storedUser = loadAuthUser();
+        if (storedUser) {
+          setAuthUser(storedUser);
+          const localSave = loadSavedState(storedUser);
+          if (localSave) {
+            setTeams(localSave.teams);
+            setFreeAgents(localSave.freeAgents);
+            setSelections(localSave.selections);
+            setOwnedTeamId(localSave.ownedTeamId ?? null);
+            setSeasonState(localSave.seasonState ?? initialSeasonState);
+            setScoutingState(localSave.scoutingState ?? initialScoutingState);
+            setPurchasedUpgrades(localSave.purchasedUpgrades ?? []);
+          }
+        }
         setHasHydratedRemote(true);
         return;
       }
@@ -1773,6 +1986,8 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
         setSelections(remoteSave.selections as SelectionMap);
         setOwnedTeamId(remoteSave.ownedTeamId ?? null);
         setSeasonState((remoteSave.seasonState as SeasonState | undefined) ?? initialSeasonState);
+        setScoutingState((remoteSave.scoutingState as ScoutingState | undefined) ?? initialScoutingState);
+        setPurchasedUpgrades(remoteSave.purchasedUpgrades ?? []);
       } else {
         const localSave = loadSavedState(remoteUser);
         if (localSave) {
@@ -1781,6 +1996,8 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
           setSelections(localSave.selections);
           setOwnedTeamId(localSave.ownedTeamId ?? null);
           setSeasonState(localSave.seasonState ?? initialSeasonState);
+          setScoutingState(localSave.scoutingState ?? initialScoutingState);
+          setPurchasedUpgrades(localSave.purchasedUpgrades ?? []);
         }
       }
       setHasHydratedRemote(true);
@@ -1788,21 +2005,16 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   }, []);
 
   useEffect(() => {
-    if (!authUser && hasHydratedRemote) {
-      window.location.href = "/login";
-    }
-  }, [authUser, hasHydratedRemote]);
-
-  useEffect(() => {
-    const saveData: SavedGameState = { teams, freeAgents, selections, ownedTeamId, seasonState };
+    if (!hasHydratedRemote) return;
+    const saveData: SavedGameState = { teams, freeAgents, selections, ownedTeamId, seasonState, scoutingState, purchasedUpgrades };
     window.localStorage.setItem(profileSaveKey(authUser), JSON.stringify(saveData));
     if (authUser?.provider === "supabase" && authUser.id && hasHydratedRemote) {
       void saveRemoteSave(authUser, saveData);
     }
-  }, [authUser, freeAgents, hasHydratedRemote, ownedTeamId, seasonState, selections, teams]);
+  }, [authUser, freeAgents, hasHydratedRemote, ownedTeamId, purchasedUpgrades, scoutingState, seasonState, selections, teams]);
 
   async function signOut() {
-    window.localStorage.setItem(profileSaveKey(authUser), JSON.stringify({ teams, freeAgents, selections, ownedTeamId, seasonState }));
+    window.localStorage.setItem(profileSaveKey(authUser), JSON.stringify({ teams, freeAgents, selections, ownedTeamId, seasonState, scoutingState, purchasedUpgrades }));
     await signOutSupabase();
     clearAuthUser();
     const guestSave = loadSavedState(null);
@@ -1812,6 +2024,8 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     setSelections(guestSave?.selections ?? defaultSelections(league.teams));
     setOwnedTeamId(guestSave?.ownedTeamId ?? null);
     setSeasonState(guestSave?.seasonState ?? initialSeasonState);
+    setScoutingState(guestSave?.scoutingState ?? initialScoutingState);
+    setPurchasedUpgrades(guestSave?.purchasedUpgrades ?? []);
   }
 
   function createOwnedTeam(city: string, mascot: string, budget: StartingBudget) {
@@ -1827,6 +2041,8 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     setOwnedTeamId(team.id);
     setSelectedTeamId(team.id);
     setSeasonState(initialSeasonState);
+    setScoutingState(initialScoutingState);
+    setPurchasedUpgrades([]);
     setActiveTab("office");
   }
 
@@ -1932,6 +2148,10 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
       }),
     );
     setFreeAgents((current) => current.filter((candidate) => candidate.id !== player.id));
+    setScoutingState((current) => ({
+      ...current,
+      foundIds: current.foundIds.filter((id) => id !== player.id),
+    }));
   }
 
   function releasePlayer(team: Team, player: Player) {
@@ -2120,7 +2340,25 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     );
   }
 
+  function purchaseFacilityNode(team: Team, nodeId: string) {
+    const node = facilityNodes.find((candidate) => candidate.id === nodeId);
+    if (!node || purchasedUpgrades.includes(nodeId)) return;
+    setTeams((current) =>
+      current.map((candidate) => {
+        if (candidate.id !== team.id) return candidate;
+        if (candidate.cash < node.cost || candidate.facilities[node.facility] < node.level) return candidate;
+        return {
+          ...candidate,
+          cash: candidate.cash - node.cost,
+          wageBudget: node.id === "sponsor-slot-2" ? candidate.wageBudget + 200 : candidate.wageBudget,
+        };
+      }),
+    );
+    setPurchasedUpgrades((current) => (current.includes(nodeId) ? current : [...current, nodeId]));
+  }
+
   function craftGear(team: Team, gear: "bats" | "gloves" | "cleats" | "uniforms") {
+    if (!hasUpgrade(purchasedUpgrades, "crafting-bench")) return;
     setTeams((current) =>
       current.map((candidate) => {
         if (candidate.id !== team.id) return candidate;
@@ -2171,6 +2409,49 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
           : candidate,
       ),
     );
+  }
+
+  function startScouting(team: Team, focus: ScoutingFocus) {
+    const costs: Record<ScoutingFocus, number> = { local: 80, college: 140, veteran: 260, rising: 420 };
+    const scoutSlots = hasUpgrade(purchasedUpgrades, "scout-slot-2") ? 2 : 1;
+    if (team.cash < costs[focus] || scoutingState.isSearching || scoutingState.foundIds.length >= scoutSlots) return;
+    setTeams((current) =>
+      current.map((candidate) => (candidate.id === team.id ? { ...candidate, cash: candidate.cash - costs[focus] } : candidate)),
+    );
+    setScoutingState((current) => ({ ...current, isSearching: true, activeFocus: focus }));
+
+    window.setTimeout(() => {
+      const available = freeAgents.filter((player) => !scoutingState.foundIds.includes(player.id));
+      const sorted =
+        focus === "rising"
+          ? [...available].sort((left, right) => playerOverall(right) - playerOverall(left))
+          : focus === "local"
+            ? [...available].sort((left, right) => playerOverall(left) - playerOverall(right))
+            : [...available].sort(() => Math.random() - 0.5);
+      const odds = focus === "rising" ? [0, 1, 1, 2] : focus === "local" ? [0, 1, 1, 2, 3] : [0, 1, 2, 2, 3];
+      const count = odds[Math.floor(Math.random() * odds.length)];
+      const found = sorted.slice(0, Math.max(0, Math.min(count, scoutSlots - scoutingState.foundIds.length)));
+      const names = found.map((player) => player.name.split(" ").slice(-1)[0]).join(", ");
+      const summary = found.length
+        ? `The ${focus} scout returns under wet stadium lights with ${names} circled in red pencil.`
+        : `The ${focus} scout files an empty report; the notebook has coffee stains and no signatures.`;
+
+      setScoutingState((current) => ({
+        isSearching: false,
+        activeFocus: null,
+        foundIds: [...new Set([...current.foundIds, ...found.map((player) => player.id)])].slice(0, scoutSlots),
+        reports: [
+          {
+            id: `report-${Date.now()}`,
+            focus,
+            week: seasonState.week,
+            foundIds: found.map((player) => player.id),
+            summary,
+          },
+          ...current.reports,
+        ],
+      }));
+    }, hasUpgrade(purchasedUpgrades, "strategy-board") ? 650 : 1100);
   }
 
   function advanceLeagueWeek() {
@@ -2302,7 +2583,21 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     window.history.pushState(null, "", "/match");
   }
 
-  if (!authUser || !hasHydratedRemote) {
+  const discoveredProspects = freeAgents.filter((player) => scoutingState.foundIds.includes(player.id));
+
+  if (!hasHydratedRemote) {
+    return (
+      <main className="login-shell">
+        <section className="login-panel">
+          <p className="eyebrow">Manager account</p>
+          <h1>Loading Save</h1>
+          <p className="team-story">Checking the local clubhouse ledger.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (!authUser) {
     return (
       <main className="login-shell">
         <section className="login-panel">
@@ -2383,8 +2678,10 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
             team={selectedTeam}
             nextGame={scheduled.label}
             onAutoPick={autoPick}
-            onTrain={trainTeam}
-            onFacility={upgradeFacility}
+            onOpenSeason={() => {
+              setActiveTab("season");
+              window.history.pushState(null, "", "/season");
+            }}
           />
         ) : null}
         {activeTab === "staff" ? <StaffView team={selectedTeam} onHireStaff={hireStaff} /> : null}
@@ -2401,10 +2698,25 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
         ) : null}
         {activeTab === "training" ? <TrainingView team={selectedTeam} onTrainPlayer={trainPlayer} onRunCoachWeek={runCoachWeek} /> : null}
         {activeTab === "market" ? (
-          <MarketView team={selectedTeam} freeAgents={freeAgents} onSign={signPlayer} onRelease={releasePlayer} />
+          <MarketView
+            team={selectedTeam}
+            prospects={discoveredProspects}
+            scoutingState={scoutingState}
+            purchasedUpgrades={purchasedUpgrades}
+            seasonWeek={seasonState.week}
+            onStartScouting={startScouting}
+            onSign={signPlayer}
+            onRelease={releasePlayer}
+          />
         ) : null}
         {activeTab === "facilities" ? (
-          <FacilitiesView team={selectedTeam} onUpgradeNamedFacility={upgradeNamedFacility} onCraftGear={craftGear} />
+          <FacilitiesView
+            team={selectedTeam}
+            purchasedUpgrades={purchasedUpgrades}
+            onCraftGear={craftGear}
+            onPurchaseNode={purchaseFacilityNode}
+            onUpgradeNamedFacility={upgradeNamedFacility}
+          />
         ) : null}
         {activeTab === "sponsors" ? (
           <SponsorsView team={selectedTeam} onAcceptSponsor={acceptSponsor} onMediaDay={mediaDay} />
