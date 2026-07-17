@@ -183,6 +183,7 @@ const startingBudgetOptions: Array<{ value: StartingBudget; label: string; descr
   { value: 500, label: "$500k", description: "Balanced climb: enough room for one plan, not enough for mistakes." },
   { value: 1000, label: "$1M", description: "Backed project: stronger start, higher expectations." },
 ];
+const blockedTeamTerms = ["fuck", "shit", "bitch", "asshole", "nigger", "nigga", "cunt", "slut", "whore"];
 const initialSeasonState: SeasonState = {
   season: 1,
   day: 1,
@@ -192,6 +193,20 @@ const initialSeasonState: SeasonState = {
   phase: "season",
   lastWeekSummary: ["Create a club, sign staff, pick a sponsor, and survive the Challenger table."],
 };
+
+function normalizeTeamInput(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function validateTeamNamePart(value: string, label: string) {
+  const cleaned = normalizeTeamInput(value);
+  const lower = cleaned.toLowerCase();
+  if (cleaned.length < 2) return `${label} needs at least 2 characters.`;
+  if (cleaned.length > 24) return `${label} must be 24 characters or less.`;
+  if (!/^[a-z0-9 .'-]+$/i.test(cleaned)) return `${label} can use letters, numbers, spaces, apostrophes, periods, and hyphens.`;
+  if (blockedTeamTerms.some((term) => lower.includes(term))) return `${label} has a word the league office will not approve.`;
+  return "";
+}
 const initialScoutingState: ScoutingState = {
   isSearching: false,
   activeFocus: null,
@@ -367,6 +382,16 @@ function applyRecordedResult(teams: Team[], record: StoredGameRecord) {
   });
 }
 
+function resetTeamRecord(team: Team) {
+  return {
+    ...team,
+    wins: 0,
+    losses: 0,
+    runsFor: 0,
+    runsAgainst: 0,
+  };
+}
+
 function StatPill({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="stat-pill">
@@ -400,12 +425,14 @@ function Sidebar({
   team,
   day,
   nextGame,
+  navBadges,
 }: {
   activeTab: TabId;
   onTab: (tab: TabId) => void;
   team: Team;
   day: number;
   nextGame: string;
+  navBadges: Partial<Record<TabId, string>>;
 }) {
   return (
     <aside className="sidebar">
@@ -429,6 +456,7 @@ function Sidebar({
             >
               <Icon size={17} />
               <span>{tab.label}</span>
+              {navBadges[tab.id] ? <small>{navBadges[tab.id]}</small> : null}
             </Link>
           );
         })}
@@ -500,6 +528,9 @@ function CreateClubView({ onCreateTeam }: { onCreateTeam: (city: string, mascot:
   const [city, setCity] = useState("");
   const [mascot, setMascot] = useState("");
   const [budget, setBudget] = useState<StartingBudget>(100);
+  const cityError = city ? validateTeamNamePart(city, "Club city") : "";
+  const mascotError = mascot ? validateTeamNamePart(mascot, "Club nickname") : "";
+  const canSubmit = Boolean(city && mascot && !cityError && !mascotError);
 
   return (
     <main className="login-shell">
@@ -518,6 +549,7 @@ function CreateClubView({ onCreateTeam }: { onCreateTeam: (city: string, mascot:
             type="text"
             value={city}
           />
+          {cityError ? <p className="input-hint is-error">{cityError}</p> : <p className="input-hint">2-24 characters. Keep it clean for the league ledger.</p>}
           <label htmlFor="club-name">Club Nickname</label>
           <input
             id="club-name"
@@ -526,6 +558,7 @@ function CreateClubView({ onCreateTeam }: { onCreateTeam: (city: string, mascot:
             type="text"
             value={mascot}
           />
+          {mascotError ? <p className="input-hint is-error">{mascotError}</p> : <p className="input-hint">Letters, numbers, spaces, apostrophes, periods, and hyphens are allowed.</p>}
           <div className="budget-choice" role="radiogroup" aria-label="starting budget">
             {startingBudgetOptions.map((option) => (
               <button
@@ -539,7 +572,7 @@ function CreateClubView({ onCreateTeam }: { onCreateTeam: (city: string, mascot:
               </button>
             ))}
           </div>
-          <button onClick={() => onCreateTeam(city, mascot, budget)} type="button">Join Challenger Division</button>
+          <button disabled={!canSubmit} onClick={() => onCreateTeam(city, mascot, budget)} type="button">Join Challenger Division</button>
         </div>
       </section>
     </main>
@@ -663,6 +696,7 @@ function OfficeView({
     team.division === "Premier"
       ? "Bottom club drops into Challenger."
       : "Top club earns promotion into Premier.";
+  const isFirstRun = team.wins + team.losses === 0;
 
   return (
     <section className="view office-view">
@@ -700,9 +734,20 @@ function OfficeView({
             <TrendingUp size={20} />
           </div>
           <p className="team-story">{nextGameStatus}. {tableHint} Board target: {team.boardTarget}.</p>
+          {isFirstRun ? (
+            <div className="onboarding-card" aria-label="first manager checklist">
+              <p className="eyebrow">First week loop</p>
+              <ol>
+                <li><strong>Set lineup</strong><span>Use Squad or press best lineup.</span></li>
+                <li><strong>Scout market</strong><span>Start one search before spending.</span></li>
+                <li><strong>Play match</strong><span>Watch the field resolve each at-bat.</span></li>
+                <li><strong>Advance day</strong><span>CPU clubs update after the day closes.</span></li>
+              </ol>
+            </div>
+          ) : null}
           <div className="office-actions">
-            <button className="primary-action" onClick={onNextDay} type="button">Next Day</button>
-            <button onClick={() => onAutoPick(team)} type="button">Set Best Lineup</button>
+            <button className="primary-action" onClick={onNextDay} title="Advance after your current game result is ready." type="button">Next Day</button>
+            <button onClick={() => onAutoPick(team)} title="Pick the highest overall hitters and best starter." type="button">Set Best Lineup</button>
           </div>
         </section>
 
@@ -1896,7 +1941,7 @@ function LeagueView({ teams, seasonState, team }: { teams: Team[]; seasonState: 
         </thead>
         <tbody>
           {list.map((candidate, index) => (
-            <tr className={candidate.id === team.id ? "is-user-team" : ""} key={candidate.id}>
+            <tr className={`${candidate.id === team.id ? "is-user-team" : ""} ${moveStatus(candidate, index, list) === "Promotion" ? "is-promotion" : ""} ${moveStatus(candidate, index, list) === "Relegation" ? "is-relegation" : ""}`} key={candidate.id}>
               <th>{candidate.name}</th>
               <td>{teamOverall(candidate)}</td>
               <td>{candidate.wins}</td>
@@ -2146,6 +2191,12 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   const currentHome = managedTeams.find((team) => team.id === currentScheduleGame.homeId) ?? managedTeams[1] ?? managedTeams[0];
   const scheduled = makeGameRecord(currentScheduleGame.id, currentScheduleGame.day, currentAway, currentHome);
   const currentRecord = gameRecords[scheduled.id] ?? scheduled;
+  const scoutingSlots = hasUpgrade(purchasedUpgrades, "scout-slot-2") ? 2 : 1;
+  const navBadges: Partial<Record<TabId, string>> = {
+    ...(selectedChoice.lineupIds.length < 9 ? { squad: `${selectedChoice.lineupIds.length}/9` } : {}),
+    ...(!scoutingState.isSearching && scoutingState.foundIds.length < scoutingSlots ? { market: "Scout" } : {}),
+    ...(currentRecord.status === "completed" ? { office: "Next day", season: "Ready" } : { match: currentRecord.status === "in-progress" ? "Live" : "Game" }),
+  };
   const game = useMemo(() => {
     if (currentRecord.sim) return currentRecord.sim;
     const away = managedTeams.find((team) => team.id === currentRecord.awayId) ?? managedTeams[0];
@@ -2276,15 +2327,20 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   }
 
   function createOwnedTeam(city: string, mascot: string, budget: StartingBudget) {
-    const team = createExpansionTeam(authUser?.email ?? "guest", city, mascot, budget);
-    setTeams((current) => [team, ...current.filter((candidate) => candidate.id !== team.id)]);
-    setSelections((current) => ({
-      ...current,
+    const cleanCity = normalizeTeamInput(city);
+    const cleanMascot = normalizeTeamInput(mascot);
+    if (validateTeamNamePart(cleanCity, "Club city") || validateTeamNamePart(cleanMascot, "Club nickname")) return;
+    const team = createExpansionTeam(authUser?.email ?? "guest", cleanCity, cleanMascot, budget);
+    const freshTeams = league.teams.map(resetTeamRecord).filter((candidate) => candidate.id !== team.id);
+    setTeams([team, ...freshTeams]);
+    setFreeAgents(league.freeAgents);
+    setSelections({
+      ...defaultSelections(freshTeams),
       [team.id]: {
         lineupIds: team.lineup.map((player) => player.id),
         starterId: team.rotation[0].id,
       },
-    }));
+    });
     setOwnedTeamId(team.id);
     setSeasonState(initialSeasonState);
     setScoutingState(initialScoutingState);
@@ -2856,7 +2912,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
 
   return (
     <main className="app-shell">
-      <Sidebar team={selectedTeam} activeTab={activeTab} onTab={setActiveTab} day={seasonState.day} nextGame={gameResultSummary(currentRecord)} />
+      <Sidebar team={selectedTeam} activeTab={activeTab} onTab={setActiveTab} day={seasonState.day} nextGame={gameResultSummary(currentRecord)} navBadges={navBadges} />
 
       <div className="workspace">
         <Header

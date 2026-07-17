@@ -448,13 +448,6 @@ export function createLeague(seed = "night-ledger-1938"): League {
   });
 
   const sorted = [...teams].sort((left, right) => powerRank(right) - powerRank(left));
-  sorted.forEach((team, index) => {
-    const luck = Math.round((rng() - 0.44) * 5);
-    team.wins = Math.max(5, 18 - index * 2 + luck);
-    team.losses = Math.max(4, 9 + index * 2 - luck);
-    team.runsFor = Math.round(96 + powerRank(team) * 0.9 + rng() * 28);
-    team.runsAgainst = Math.round(210 - powerRank(team) * 0.75 + rng() * 22);
-  });
 
   const schedule = buildSchedule(teams);
   const freeAgents = [
@@ -468,7 +461,7 @@ export function createLeague(seed = "night-ledger-1938"): League {
 
   return {
     seed,
-    day: 17,
+    day: 1,
     teams,
     freeAgents,
     schedule,

@@ -30,14 +30,30 @@ html {
 }
 
 body {
+  position: relative;
   margin: 0;
   min-height: 100vh;
   color: var(--chalk);
   background:
+    radial-gradient(circle at 18% 0%, rgba(242, 176, 76, 0.08), transparent 28%),
+    radial-gradient(circle at 85% 12%, rgba(216, 74, 58, 0.06), transparent 24%),
     linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px) 0 0 / 58px 58px,
     linear-gradient(0deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px) 0 0 / 58px 58px,
     var(--turf);
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.22;
+  background:
+    linear-gradient(115deg, transparent 0 46%, rgba(240, 243, 232, 0.08) 47%, transparent 48%),
+    repeating-linear-gradient(0deg, rgba(240, 243, 232, 0.018) 0 1px, transparent 1px 5px);
+  mix-blend-mode: screen;
 }
 
 button {
@@ -45,6 +61,8 @@ button {
 }
 
 .app-shell {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: 292px minmax(0, 1fr);
   min-height: 100vh;
@@ -141,6 +159,21 @@ h2 {
   border: 1px solid transparent;
   color: var(--chalk-dim);
   text-decoration: none;
+}
+
+.side-nav a span {
+  min-width: 0;
+  flex: 1;
+}
+
+.side-nav a small {
+  padding: 2px 6px;
+  border: 1px solid rgba(216, 74, 58, 0.42);
+  background: rgba(216, 74, 58, 0.14);
+  color: #ffd6ce;
+  font-family: var(--mono-font);
+  font-size: 0.62rem;
+  text-transform: uppercase;
 }
 
 .side-nav a:hover,
@@ -453,6 +486,24 @@ h3 {
   line-height: 1.3;
 }
 
+.input-hint {
+  margin: -4px 0 8px;
+  color: var(--chalk-dim);
+  font-family: var(--mono-font);
+  font-size: 0.68rem;
+}
+
+.input-hint.is-error {
+  color: #ffb4a9;
+}
+
+.dev-login button:disabled,
+.wide-auth-button:disabled,
+.office-actions button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
 .login-mode {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -616,7 +667,9 @@ h3 {
 .scoreboard-panel,
 .chronicle-entry {
   border: 1px solid var(--line);
-  background: var(--panel);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 34%),
+    var(--panel);
   box-shadow: var(--shadow);
 }
 
@@ -738,14 +791,6 @@ h3 {
   white-space: nowrap;
 }
 
-.decision-panel .primary-action {
-  min-height: 46px;
-  padding-inline: 18px;
-  border-color: rgba(216, 74, 58, 0.55);
-  background: rgba(216, 74, 58, 0.16);
-  color: #ffd6ce;
-}
-
 .office-summary {
   grid-template-columns: 1fr;
 }
@@ -753,9 +798,70 @@ h3 {
 .office-panel {
   min-width: 0;
   padding: 14px;
-  border: 1px solid var(--line);
-  background: var(--panel);
+  border: 1px solid rgba(240, 243, 232, 0.15);
+  background:
+    repeating-linear-gradient(0deg, rgba(240, 243, 232, 0.018) 0 1px, transparent 1px 24px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 42%),
+    var(--panel);
   box-shadow: var(--shadow);
+}
+
+.decision-panel {
+  border-color: rgba(242, 176, 76, 0.46);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(216, 74, 58, 0.12), transparent 32%),
+    repeating-linear-gradient(0deg, rgba(242, 176, 76, 0.028) 0 1px, transparent 1px 22px),
+    linear-gradient(180deg, rgba(242, 176, 76, 0.12), rgba(7, 19, 14, 0.92));
+}
+
+.compact-office-status {
+  border-color: rgba(94, 183, 168, 0.28);
+}
+
+.onboarding-card {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(94, 183, 168, 0.34);
+  background:
+    linear-gradient(90deg, rgba(94, 183, 168, 0.12), transparent),
+    rgba(0, 0, 0, 0.18);
+}
+
+.onboarding-card ol {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: loop;
+}
+
+.onboarding-card li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 0.76fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  color: var(--chalk-dim);
+  font-family: var(--mono-font);
+  font-size: 0.72rem;
+  counter-increment: loop;
+}
+
+.onboarding-card li::before {
+  content: counter(loop);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(242, 176, 76, 0.48);
+  color: var(--amber-soft);
+  background: rgba(242, 176, 76, 0.1);
+}
+
+.onboarding-card strong {
+  color: var(--chalk);
+  font-family: var(--display-font);
+  text-transform: uppercase;
 }
 
 .finance-lines {
@@ -787,12 +893,31 @@ h3 {
 
 .office-actions button,
 .release-wrap button {
-  min-height: 36px;
+  min-height: 38px;
+  padding: 0 12px;
   border: 1px solid rgba(242, 176, 76, 0.36);
   background: rgba(242, 176, 76, 0.09);
   color: var(--amber-soft);
   cursor: pointer;
+  font-family: var(--mono-font);
+  font-size: 0.74rem;
+  text-transform: uppercase;
   transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.office-actions button:hover,
+.release-wrap button:hover {
+  border-color: rgba(242, 176, 76, 0.68);
+  background: rgba(242, 176, 76, 0.16);
+}
+
+.decision-panel .primary-action {
+  min-height: 46px;
+  padding-inline: 18px;
+  border-color: rgba(216, 74, 58, 0.72);
+  background: linear-gradient(180deg, rgba(216, 74, 58, 0.32), rgba(216, 74, 58, 0.12));
+  color: #ffd6ce;
+  box-shadow: 0 0 22px rgba(216, 74, 58, 0.16);
 }
 
 .office-actions button:active,
@@ -801,10 +926,6 @@ h3 {
 .scout-card:active,
 .facility-node:active {
   transform: translateY(1px) scale(0.99);
-}
-
-.office-actions button {
-  padding: 0 12px;
 }
 
 .office-actions button:disabled,
@@ -1954,7 +2075,9 @@ h3 {
 .ledger-table {
   width: 100%;
   border-collapse: collapse;
-  background: rgba(0, 0, 0, 0.24);
+  background:
+    repeating-linear-gradient(0deg, rgba(240, 243, 232, 0.02) 0 1px, transparent 1px 28px),
+    rgba(0, 0, 0, 0.24);
   font-size: 0.82rem;
 }
 
@@ -1984,6 +2107,9 @@ h3 {
 .line-score thead,
 .ledger-table thead {
   color: var(--amber-soft);
+  background: rgba(242, 176, 76, 0.06);
+  font-family: var(--display-font);
+  text-transform: uppercase;
 }
 
 .danger {
@@ -2141,6 +2267,22 @@ meter {
 
 .ledger-table tr.is-user-team th {
   color: var(--amber-soft);
+}
+
+.ledger-table tr.is-promotion {
+  background: rgba(94, 183, 168, 0.08);
+}
+
+.ledger-table tr.is-promotion td:last-child {
+  color: #bce9dc;
+}
+
+.ledger-table tr.is-relegation {
+  background: rgba(216, 74, 58, 0.08);
+}
+
+.ledger-table tr.is-relegation td:last-child {
+  color: #ffb4a9;
 }
 
 @media (max-width: 980px) {
