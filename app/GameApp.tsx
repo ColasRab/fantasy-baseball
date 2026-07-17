@@ -37,10 +37,12 @@ import {
   type SavedGamePayload,
 } from "./lib/auth";
 import {
+  buildSchedule,
   createExpansionTeam,
   createLeague,
   sponsorPool,
   type Player,
+  type ScheduleGame,
   type Sponsor,
   type StaffMember,
   type StaffRole,
@@ -143,6 +145,21 @@ type ScoutingState = {
   reports: ScoutingReport[];
   foundIds: string[];
 };
+type MatchImpact = {
+  won: boolean;
+  score: string;
+  opponent: string;
+  mvp: string;
+  turningPoint: string;
+  gateIncome: number;
+  sponsorBonus: number;
+  payrollBill: number;
+  netCash: number;
+  fanDelta: number;
+  chemistryDelta: number;
+  moraleDelta: number;
+  fatigueDelta: number;
+};
 type StoredGameRecord = {
   id: string;
   day: number;
@@ -155,6 +172,7 @@ type StoredGameRecord = {
   awayRuns?: number;
   homeRuns?: number;
   completedAt?: string;
+  impact?: MatchImpact;
 };
 type SeasonState = {
   season: number;
@@ -175,6 +193,7 @@ type SavedGameState = {
   scoutingState?: ScoutingState;
   purchasedUpgrades?: string[];
   gameRecords?: Record<string, StoredGameRecord>;
+  schedule?: ScheduleGame[];
 };
 
 const saveKey = "diamond-manager-gm-state-v6";
@@ -268,6 +287,14 @@ function money(value: number) {
   return `$${value.toLocaleString()}k`;
 }
 
+function signedMoney(value: number) {
+  return `${value >= 0 ? "+" : "-"}${money(Math.abs(value))}`;
+}
+
+function clampScore(value: number, min = 0, max = 99) {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
 function lineRuns(line: BoxLine) {
   return line.runs.reduce((sum, inning) => sum + inning, 0);
 }
@@ -336,6 +363,123 @@ function scoredRuns(sim: SimGame) {
   };
 }
 
+function playerForm(player: Player) {
+  if (player.fatigue >= 72) {
+    return { label: "Spent", tone: "bad", description: "Fatigue is high enough that this player needs rest soon." };
+  }
+  if (player.morale <= 38) {
+    return { label: "Slump", tone: "bad", description: "Low morale is dragging the player below their normal level." };
+  }
+  if (player.morale >= 78 && player.fatigue <= 42) {
+    return { label: "On a roll", tone: "good", description: "Morale is high and fatigue is under control." };
+  }
+  if (player.fatigue >= 52) {
+    return { label: "Tired", tone: "warn", description: "Usable, but repeated starts will wear this player down." };
+  }
+  return { label: "Steady", tone: "neutral", description: "No urgent form issue this week." };
+}
+
+function eventBelongsToTeam(event: GameEvent, team: Team, sim: SimGame) {
+  return (team.id === sim.away.id && event.half === "top") || (team.id === sim.home.id && event.half === "bottom");
+}
+
+function matchMvpForTeam(sim: SimGame, team: Team) {
+  const scores = new Map<string, number>();
+  const playerNames = new Set(team.roster.map((player) => player.name));
+  const resultWeights: Record<string, number> = { HR: 7, "3B": 5, "2B": 4, "1B": 3, BB: 2, E: 1, K: -1 };
+
+  sim.events.forEach((event) => {
+    if (!eventBelongsToTeam(event, team, sim) || !playerNames.has(event.batter)) return;
+    scores.set(event.batter, (scores.get(event.batter) ?? 0) + (resultWeights[event.result] ?? 0) + event.leverage);
+  });
+
+  const leader = [...scores.entries()].sort((left, right) => right[1] - left[1])[0]?.[0];
+  return leader ?? team.lineup[0]?.name ?? team.rotation[0]?.name ?? "No standout";
+}
+
+function matchTurningPoint(sim: SimGame) {
+  const weightedEvents = sim.events
+    .filter((event) => ["HR", "3B", "2B", "1B", "E", "BB"].includes(event.result))
+    .sort((left, right) => right.leverage - left.leverage);
+  return weightedEvents[0]?.text ?? sim.chronicle[0] ?? sim.headline;
+}
+
+function buildMatchImpact(record: StoredGameRecord, sim: SimGame, team: Team): MatchImpact {
+  const userIsAway = sim.away.id === team.id;
+  const userRuns = userIsAway ? record.awayRuns ?? lineRuns(sim.awayLine) : record.homeRuns ?? lineRuns(sim.homeLine);
+  const opponentRuns = userIsAway ? record.homeRuns ?? lineRuns(sim.homeLine) : record.awayRuns ?? lineRuns(sim.awayLine);
+  const opponent = userIsAway ? sim.home : sim.away;
+  const won = userRuns > opponentRuns;
+  const gateIncome = Math.round(90 + team.fanSupport * 5 + team.stadium * 4 + (won ? 90 : 20));
+  const sponsorBonus = team.sponsor && won ? team.sponsor.bonus : 0;
+  const payrollBill = Math.max(25, Math.round(team.payroll / 40));
+  const fanDelta = won ? 3 : -2;
+  const chemistryDelta = won ? 2 : -1;
+  const moraleDelta = won ? 4 : -3;
+  const fatigueDelta = 5 + Math.max(0, Math.min(4, Math.abs(userRuns - opponentRuns)));
+
+  return {
+    won,
+    score: `${team.abbreviation} ${userRuns}, ${opponent.abbreviation} ${opponentRuns}`,
+    opponent: opponent.name,
+    mvp: matchMvpForTeam(sim, team),
+    turningPoint: matchTurningPoint(sim),
+    gateIncome,
+    sponsorBonus,
+    payrollBill,
+    netCash: gateIncome + sponsorBonus - payrollBill,
+    fanDelta,
+    chemistryDelta,
+    moraleDelta,
+    fatigueDelta,
+  };
+}
+
+function applyMatchImpact(team: Team, impact: MatchImpact) {
+  const activeIds = new Set([...team.lineup.map((player) => player.id), team.rotation[0]?.id].filter(Boolean));
+
+  return withPayroll({
+    ...team,
+    cash: Math.max(0, team.cash + impact.netCash),
+    fanSupport: clampScore(team.fanSupport + impact.fanDelta, 1, 99),
+    chemistry: clampScore(team.chemistry + impact.chemistryDelta, 1, 99),
+    roster: team.roster.map((player) =>
+      activeIds.has(player.id)
+        ? {
+          ...player,
+          morale: clampScore(player.morale + impact.moraleDelta, 20, 99),
+          fatigue: clampScore(player.fatigue + impact.fatigueDelta, 0, 99),
+        }
+        : {
+          ...player,
+          morale: clampScore(player.morale + (impact.won ? 1 : -1), 20, 99),
+          fatigue: Math.max(0, player.fatigue - 1),
+        },
+    ),
+    lineup: team.lineup.map((player) =>
+      activeIds.has(player.id)
+        ? {
+          ...player,
+          morale: clampScore(player.morale + impact.moraleDelta, 20, 99),
+          fatigue: clampScore(player.fatigue + impact.fatigueDelta, 0, 99),
+        }
+        : player,
+    ),
+    rotation: team.rotation.map((player, index) =>
+      index === 0
+        ? {
+          ...player,
+          morale: clampScore(player.morale + impact.moraleDelta, 20, 99),
+          fatigue: clampScore(player.fatigue + impact.fatigueDelta + 3, 0, 99),
+        }
+        : {
+          ...player,
+          fatigue: Math.max(0, player.fatigue - 2),
+        },
+    ),
+  });
+}
+
 function completeGameRecord(day: number, away: Team, home: Team, seed: string, existing?: StoredGameRecord): StoredGameRecord {
   const sim = existing?.sim ?? simulateGame(away, home, seed);
   const { awayRuns, homeRuns } = scoredRuns(sim);
@@ -390,6 +534,18 @@ function resetTeamRecord(team: Team) {
     runsFor: 0,
     runsAgainst: 0,
   };
+}
+
+function normalizeOwnedLeagueTeams(teams: Team[], ownedTeamId: string | null) {
+  if (!ownedTeamId || teams.length % 2 === 0) return teams;
+  const removable =
+    [...teams].reverse().find((team) => team.id !== ownedTeamId && team.division === "Challenger") ??
+    [...teams].reverse().find((team) => team.id !== ownedTeamId);
+  return removable ? teams.filter((team) => team.id !== removable.id) : teams;
+}
+
+function scheduleIncludesTeam(schedule: ScheduleGame[], teamId: string | null) {
+  return Boolean(teamId && schedule.some((game) => game.awayId === teamId || game.homeId === teamId));
 }
 
 function StatPill({ label, value }: { label: string; value: number | string }) {
@@ -678,16 +834,49 @@ function StaffView({
   );
 }
 
+function PostMatchReport({ impact }: { impact: MatchImpact }) {
+  const resultLabel = impact.won ? "Win" : "Loss";
+
+  return (
+    <div className={`post-match-report ${impact.won ? "is-win" : "is-loss"}`} aria-label="post match report">
+      <div className="post-match-top">
+        <div>
+          <p className="eyebrow">Post-match report</p>
+          <h4>{resultLabel}: {impact.score}</h4>
+        </div>
+        <strong>{signedMoney(impact.netCash)}</strong>
+      </div>
+      <p>{impact.turningPoint}</p>
+      <div className="impact-grid">
+        <span><em>MVP</em><strong>{impact.mvp}</strong></span>
+        <span><em>Gate</em><strong>{money(impact.gateIncome)}</strong></span>
+        <span><em>Sponsor</em><strong>{money(impact.sponsorBonus)}</strong></span>
+        <span><em>Payroll</em><strong>-{money(impact.payrollBill)}</strong></span>
+      </div>
+      <div className="impact-line">
+        <span>Fans {impact.fanDelta >= 0 ? "+" : ""}{impact.fanDelta}</span>
+        <span>Chemistry {impact.chemistryDelta >= 0 ? "+" : ""}{impact.chemistryDelta}</span>
+        <span>Active morale {impact.moraleDelta >= 0 ? "+" : ""}{impact.moraleDelta}</span>
+        <span>Fatigue +{impact.fatigueDelta}</span>
+      </div>
+    </div>
+  );
+}
+
 function OfficeView({
   team,
   nextGame,
   nextGameStatus,
+  matchImpact,
+  canAdvanceDay,
   onAutoPick,
   onNextDay,
 }: {
   team: Team;
   nextGame: string;
   nextGameStatus: string;
+  matchImpact?: MatchImpact;
+  canAdvanceDay: boolean;
   onAutoPick: (team: Team) => void;
   onNextDay: () => void;
 }) {
@@ -734,6 +923,7 @@ function OfficeView({
             <TrendingUp size={20} />
           </div>
           <p className="team-story">{nextGameStatus}. {tableHint} Board target: {team.boardTarget}.</p>
+          {matchImpact ? <PostMatchReport impact={matchImpact} /> : null}
           {isFirstRun ? (
             <div className="onboarding-card" aria-label="first manager checklist">
               <p className="eyebrow">First week loop</p>
@@ -746,7 +936,9 @@ function OfficeView({
             </div>
           ) : null}
           <div className="office-actions">
-            <button className="primary-action" onClick={onNextDay} title="Advance after your current game result is ready." type="button">Next Day</button>
+            <button className="primary-action" onClick={onNextDay} title={canAdvanceDay ? "Advance the league after today's result." : "Go watch today's game before advancing."} type="button">
+              {canAdvanceDay ? "Advance Day" : "Watch Match"}
+            </button>
             <button onClick={() => onAutoPick(team)} title="Pick the highest overall hitters and best starter." type="button">Set Best Lineup</button>
           </div>
         </section>
@@ -1146,6 +1338,7 @@ function PlayerCard({
         ["EYE", player.eye],
       ];
   const factors = playerGradeFactors(player);
+  const form = playerForm(player);
 
   return (
     <article className={`player-card ${selected ? "is-selected" : ""}`}>
@@ -1156,7 +1349,10 @@ function PlayerCard({
       <GradeBadge player={player} />
       <h3>{player.name}</h3>
       <p className="nickname">"{player.nickname}"</p>
-      <p className="technique-line">{player.signatureTechnique}</p>
+      <div className="player-card-flags">
+        <p className="technique-line">{player.signatureTechnique}</p>
+        <span className={`form-badge is-${form.tone}`} title={form.description}>{form.label}</span>
+      </div>
       <div className="mini-stats">
         {mainStats.map(([label, value]) => (
           <AbbrevStat abbreviation={label} key={label} label={statTooltips[label] ?? label} value={value} />
@@ -2164,7 +2360,11 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   const league = useMemo(() => createLeague(), []);
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => loadAuthUser());
   const initialSaved = typeof window === "undefined" ? null : loadSavedState(loadAuthUser());
-  const [teams, setTeams] = useState<Team[]>(() => initialSaved?.teams ?? league.teams);
+  const initialTeams = useMemo(
+    () => normalizeOwnedLeagueTeams(initialSaved?.teams ?? league.teams, initialSaved?.ownedTeamId ?? null),
+    [initialSaved, league.teams],
+  );
+  const [teams, setTeams] = useState<Team[]>(() => initialTeams);
   const [freeAgents, setFreeAgents] = useState<Player[]>(() => initialSaved?.freeAgents ?? league.freeAgents);
   const [selections, setSelections] = useState<SelectionMap>(() => initialSaved?.selections ?? defaultSelections(league.teams));
   const [ownedTeamId, setOwnedTeamId] = useState<string | null>(() => initialSaved?.ownedTeamId ?? null);
@@ -2172,6 +2372,11 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   const [scoutingState, setScoutingState] = useState<ScoutingState>(() => initialSaved?.scoutingState ?? initialScoutingState);
   const [purchasedUpgrades, setPurchasedUpgrades] = useState<string[]>(() => initialSaved?.purchasedUpgrades ?? []);
   const [gameRecords, setGameRecords] = useState<Record<string, StoredGameRecord>>(() => initialSaved?.gameRecords ?? {});
+  const [schedule, setSchedule] = useState<ScheduleGame[]>(() =>
+    initialSaved?.schedule && scheduleIncludesTeam(initialSaved.schedule, initialSaved.ownedTeamId ?? null)
+      ? initialSaved.schedule
+      : buildSchedule(initialTeams),
+  );
   const managedTeams = useMemo(
     () => teams.map((team) => applySelection(team, selections[team.id])),
     [teams, selections],
@@ -2182,11 +2387,11 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   const ownedTeam = ownedTeamId ? managedTeams.find((team) => team.id === ownedTeamId) : null;
   const selectedTeam = ownedTeam ?? managedTeams[0];
   const selectedChoice = selections[selectedTeam.id] ?? defaultSelections([selectedTeam])[selectedTeam.id];
-  const dayGames = league.schedule.filter((game) => game.day === seasonState.day);
+  const dayGames = schedule.filter((game) => game.day === seasonState.day);
   const currentScheduleGame =
     dayGames.find((game) => game.awayId === selectedTeam.id || game.homeId === selectedTeam.id) ??
     dayGames[0] ??
-    league.schedule[0];
+    schedule[0];
   const currentAway = managedTeams.find((team) => team.id === currentScheduleGame.awayId) ?? managedTeams[0];
   const currentHome = managedTeams.find((team) => team.id === currentScheduleGame.homeId) ?? managedTeams[1] ?? managedTeams[0];
   const scheduled = makeGameRecord(currentScheduleGame.id, currentScheduleGame.day, currentAway, currentHome);
@@ -2203,6 +2408,11 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     const home = managedTeams.find((team) => team.id === currentRecord.homeId) ?? managedTeams[1];
     return simulateGame(away, home, currentRecord.id);
   }, [currentRecord.awayId, currentRecord.homeId, currentRecord.id, currentRecord.sim, managedTeams]);
+  const currentMatchImpact =
+    currentRecord.impact ??
+    (currentRecord.status === "completed" && (currentRecord.awayId === selectedTeam.id || currentRecord.homeId === selectedTeam.id)
+      ? buildMatchImpact(currentRecord, game, selectedTeam)
+      : undefined);
 
   useEffect(() => {
     setGameRecords((current) => {
@@ -2259,7 +2469,8 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
           setAuthUser(storedUser);
           const localSave = loadSavedState(storedUser);
           if (localSave) {
-            setTeams(localSave.teams);
+            const normalizedTeams = normalizeOwnedLeagueTeams(localSave.teams, localSave.ownedTeamId ?? null);
+            setTeams(normalizedTeams);
             setFreeAgents(localSave.freeAgents);
             setSelections(localSave.selections);
             setOwnedTeamId(localSave.ownedTeamId ?? null);
@@ -2267,6 +2478,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
             setScoutingState(localSave.scoutingState ?? initialScoutingState);
             setPurchasedUpgrades(localSave.purchasedUpgrades ?? []);
             setGameRecords(localSave.gameRecords ?? {});
+            setSchedule(localSave.schedule && scheduleIncludesTeam(localSave.schedule, localSave.ownedTeamId ?? null) ? localSave.schedule : buildSchedule(normalizedTeams));
           }
         }
         setHasHydratedRemote(true);
@@ -2276,7 +2488,8 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
       setAuthUser(remoteUser);
       const remoteSave = await loadRemoteSave(remoteUser.id);
       if (isSavedGamePayload(remoteSave)) {
-        setTeams(remoteSave.teams as Team[]);
+        const normalizedTeams = normalizeOwnedLeagueTeams(remoteSave.teams as Team[], remoteSave.ownedTeamId ?? null);
+        setTeams(normalizedTeams);
         setFreeAgents(remoteSave.freeAgents as Player[]);
         setSelections(remoteSave.selections as SelectionMap);
         setOwnedTeamId(remoteSave.ownedTeamId ?? null);
@@ -2284,10 +2497,12 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
         setScoutingState((remoteSave.scoutingState as ScoutingState | undefined) ?? initialScoutingState);
         setPurchasedUpgrades(remoteSave.purchasedUpgrades ?? []);
         setGameRecords((remoteSave as SavedGameState).gameRecords ?? {});
+        setSchedule((remoteSave as SavedGameState).schedule && scheduleIncludesTeam((remoteSave as SavedGameState).schedule ?? [], remoteSave.ownedTeamId ?? null) ? (remoteSave as SavedGameState).schedule! : buildSchedule(normalizedTeams));
       } else {
         const localSave = loadSavedState(remoteUser);
         if (localSave) {
-          setTeams(localSave.teams);
+          const normalizedTeams = normalizeOwnedLeagueTeams(localSave.teams, localSave.ownedTeamId ?? null);
+          setTeams(normalizedTeams);
           setFreeAgents(localSave.freeAgents);
           setSelections(localSave.selections);
           setOwnedTeamId(localSave.ownedTeamId ?? null);
@@ -2295,6 +2510,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
           setScoutingState(localSave.scoutingState ?? initialScoutingState);
           setPurchasedUpgrades(localSave.purchasedUpgrades ?? []);
           setGameRecords(localSave.gameRecords ?? {});
+          setSchedule(localSave.schedule && scheduleIncludesTeam(localSave.schedule, localSave.ownedTeamId ?? null) ? localSave.schedule : buildSchedule(normalizedTeams));
         }
       }
       setHasHydratedRemote(true);
@@ -2303,20 +2519,21 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
 
   useEffect(() => {
     if (!hasHydratedRemote) return;
-    const saveData: SavedGameState = { teams, freeAgents, selections, ownedTeamId, seasonState, scoutingState, purchasedUpgrades, gameRecords };
+    const saveData: SavedGameState = { teams, freeAgents, selections, ownedTeamId, seasonState, scoutingState, purchasedUpgrades, gameRecords, schedule };
     window.localStorage.setItem(profileSaveKey(authUser), JSON.stringify(saveData));
     if (authUser?.provider === "supabase" && authUser.id && hasHydratedRemote) {
       void saveRemoteSave(authUser, saveData);
     }
-  }, [authUser, freeAgents, gameRecords, hasHydratedRemote, ownedTeamId, purchasedUpgrades, scoutingState, seasonState, selections, teams]);
+  }, [authUser, freeAgents, gameRecords, hasHydratedRemote, ownedTeamId, purchasedUpgrades, schedule, scoutingState, seasonState, selections, teams]);
 
   async function signOut() {
-    window.localStorage.setItem(profileSaveKey(authUser), JSON.stringify({ teams, freeAgents, selections, ownedTeamId, seasonState, scoutingState, purchasedUpgrades, gameRecords }));
+    window.localStorage.setItem(profileSaveKey(authUser), JSON.stringify({ teams, freeAgents, selections, ownedTeamId, seasonState, scoutingState, purchasedUpgrades, gameRecords, schedule }));
     await signOutSupabase();
     clearAuthUser();
     const guestSave = loadSavedState(null);
+    const guestTeams = normalizeOwnedLeagueTeams(guestSave?.teams ?? league.teams, guestSave?.ownedTeamId ?? null);
     setAuthUser(null);
-    setTeams(guestSave?.teams ?? league.teams);
+    setTeams(guestTeams);
     setFreeAgents(guestSave?.freeAgents ?? league.freeAgents);
     setSelections(guestSave?.selections ?? defaultSelections(league.teams));
     setOwnedTeamId(guestSave?.ownedTeamId ?? null);
@@ -2324,6 +2541,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     setScoutingState(guestSave?.scoutingState ?? initialScoutingState);
     setPurchasedUpgrades(guestSave?.purchasedUpgrades ?? []);
     setGameRecords(guestSave?.gameRecords ?? {});
+    setSchedule(guestSave?.schedule && scheduleIncludesTeam(guestSave.schedule, guestSave.ownedTeamId ?? null) ? guestSave.schedule : buildSchedule(guestTeams));
   }
 
   function createOwnedTeam(city: string, mascot: string, budget: StartingBudget) {
@@ -2331,8 +2549,11 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     const cleanMascot = normalizeTeamInput(mascot);
     if (validateTeamNamePart(cleanCity, "Club city") || validateTeamNamePart(cleanMascot, "Club nickname")) return;
     const team = createExpansionTeam(authUser?.email ?? "guest", cleanCity, cleanMascot, budget);
-    const freshTeams = league.teams.map(resetTeamRecord).filter((candidate) => candidate.id !== team.id);
-    setTeams([team, ...freshTeams]);
+    const cpuTeams = league.teams.map(resetTeamRecord).filter((candidate) => candidate.id !== team.id);
+    const removableCpu = [...cpuTeams].reverse().find((candidate) => candidate.division === "Challenger") ?? cpuTeams[cpuTeams.length - 1];
+    const freshTeams = cpuTeams.filter((candidate) => candidate.id !== removableCpu?.id);
+    const seasonTeams = [team, ...freshTeams];
+    setTeams(seasonTeams);
     setFreeAgents(league.freeAgents);
     setSelections({
       ...defaultSelections(freshTeams),
@@ -2346,6 +2567,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     setScoutingState(initialScoutingState);
     setPurchasedUpgrades([]);
     setGameRecords({});
+    setSchedule(buildSchedule(seasonTeams));
     setActiveTab("office");
   }
 
@@ -2759,25 +2981,52 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
 
   function finalizeCurrentGame() {
     if (currentRecord.status === "completed") return;
+    const sim = currentRecord.sim ?? game;
     const completedRecord = completeGameRecord(currentScheduleGame.day, currentAway, currentHome, currentRecord.id, {
       ...currentRecord,
       status: "completed",
-      eventIndex: game.events.length - 1,
-      sim: currentRecord.sim ?? game,
-      ...scoredRuns(game),
+      eventIndex: sim.events.length - 1,
+      sim,
+      ...scoredRuns(sim),
     });
+    const impact =
+      completedRecord.awayId === selectedTeam.id || completedRecord.homeId === selectedTeam.id
+        ? buildMatchImpact(completedRecord, sim, selectedTeam)
+        : undefined;
+    const completedWithImpact = impact ? { ...completedRecord, impact } : completedRecord;
 
     setGameRecords((current) => ({
       ...current,
-      [completedRecord.id]: completedRecord,
+      [completedWithImpact.id]: completedWithImpact,
     }));
 
-    setTeams((current) => applyRecordedResult(current, completedRecord));
-    setEventIndex(game.events.length - 1);
+    setTeams((current) =>
+      applyRecordedResult(current, completedWithImpact).map((team) =>
+        impact && team.id === selectedTeam.id ? applyMatchImpact(team, impact) : team,
+      ),
+    );
+    if (impact) {
+      setSeasonState((current) => ({
+        ...current,
+        lastWeekSummary: [
+          `${impact.won ? "Win" : "Loss"} vs ${impact.opponent}: ${impact.score}`,
+          `Cash ${signedMoney(impact.netCash)} after gate, sponsor, and payroll.`,
+          `Fans ${impact.fanDelta >= 0 ? "+" : ""}${impact.fanDelta}, chemistry ${impact.chemistryDelta >= 0 ? "+" : ""}${impact.chemistryDelta}.`,
+        ],
+      }));
+    }
+    setEventIndex(sim.events.length - 1);
   }
 
   function advanceDay() {
-    const gamesToday = league.schedule.filter((scheduledGame) => scheduledGame.day === seasonState.day);
+    const userGameIsToday = currentScheduleGame.awayId === selectedTeam.id || currentScheduleGame.homeId === selectedTeam.id;
+    if (userGameIsToday && currentRecord.status !== "completed") {
+      setActiveTab("match");
+      window.history.pushState(null, "", "/match");
+      return;
+    }
+
+    const gamesToday = schedule.filter((scheduledGame) => scheduledGame.day === seasonState.day);
     const resolvedRecords: Record<string, StoredGameRecord> = {};
     let nextTeams = teams;
     let summaries: string[] = [];
@@ -2785,6 +3034,14 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     gamesToday.forEach((scheduledGame) => {
       const existing = gameRecords[scheduledGame.id];
       if (existing?.status === "completed" && existing.sim) {
+        if (existing.impact) {
+          summaries = [
+            ...summaries,
+            `${existing.impact.won ? "Win" : "Loss"} vs ${existing.impact.opponent}: ${existing.impact.score} (${signedMoney(existing.impact.netCash)})`,
+          ];
+        } else {
+          summaries = [...summaries, `${existing.label}: ${existing.awayRuns}-${existing.homeRuns}`];
+        }
         return;
       }
       const away = nextTeams.find((team) => team.id === scheduledGame.awayId) ?? nextTeams[0];
@@ -2804,13 +3061,13 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
       ...current,
       day: current.day + 1,
       week: current.week + 1,
-      phase: current.day >= league.schedule.length ? "offseason" : current.phase,
+      phase: current.day >= schedule.length ? "offseason" : current.phase,
       lastWeekSummary: summaries.length
         ? summaries.slice(0, 3)
         : [`Day ${current.day} advanced with no scheduled games.`],
     }));
-    setActiveTab("match");
-    window.history.pushState(null, "", "/match");
+    setActiveTab("office");
+    window.history.pushState(null, "", "/office");
   }
 
   function finishSeason() {
@@ -2857,7 +3114,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   }
 
   function skipGame() {
-    setEventIndex(game.events.length - 1);
+    finalizeCurrentGame();
   }
 
   function resetGame() {
@@ -2929,6 +3186,8 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
             team={selectedTeam}
             nextGame={gameResultSummary(currentRecord)}
             nextGameStatus={currentRecord.status === "completed" ? "Completed" : currentRecord.status === "in-progress" ? "In progress" : "Scheduled"}
+            matchImpact={currentMatchImpact}
+            canAdvanceDay={currentRecord.status === "completed"}
             onAutoPick={autoPick}
             onNextDay={advanceDay}
           />

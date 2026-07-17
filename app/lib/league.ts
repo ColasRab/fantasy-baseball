@@ -359,7 +359,7 @@ function payroll(roster: Player[]) {
   return roster.reduce((sum, player) => sum + player.salary, 0);
 }
 
-function buildSchedule(teams: Team[]) {
+export function buildSchedule(teams: Team[]) {
   const schedule: ScheduleGame[] = [];
   let day = 1;
   for (let round = 0; round < 5; round += 1) {
