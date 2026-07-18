@@ -5,6 +5,36 @@ import { createRng, pick, rating, type Rng } from "./utils";
 
 export type PlayerRole = "batter" | "pitcher";
 
+export const leagueTiers = ["Invitational", "Single A", "Double A", "Triple A", "Majors"] as const;
+export type LeagueTier = (typeof leagueTiers)[number];
+
+export const tierProfiles: Record<LeagueTier, {
+  minOverall: number;
+  maxOverall: number;
+  cashBase: number;
+  fanMin: number;
+  fanMax: number;
+  promotionReward: number;
+}> = {
+  Invitational: { minOverall: 34, maxOverall: 50, cashBase: 700, fanMin: 14, fanMax: 34, promotionReward: 900 },
+  "Single A": { minOverall: 46, maxOverall: 59, cashBase: 2200, fanMin: 28, fanMax: 50, promotionReward: 1800 },
+  "Double A": { minOverall: 55, maxOverall: 69, cashBase: 5200, fanMin: 42, fanMax: 66, promotionReward: 3600 },
+  "Triple A": { minOverall: 65, maxOverall: 80, cashBase: 11000, fanMin: 58, fanMax: 82, promotionReward: 7500 },
+  Majors: { minOverall: 76, maxOverall: 94, cashBase: 26000, fanMin: 72, fanMax: 96, promotionReward: 14000 },
+};
+
+export function tierIndex(tier: LeagueTier) {
+  return leagueTiers.indexOf(tier);
+}
+
+export function nextTier(tier: LeagueTier) {
+  return leagueTiers[Math.min(leagueTiers.length - 1, tierIndex(tier) + 1)];
+}
+
+export function previousTier(tier: LeagueTier) {
+  return leagueTiers[Math.max(0, tierIndex(tier) - 1)];
+}
+
 export type Player = {
   id: string;
   name: string;
@@ -76,7 +106,7 @@ export type Team = {
   losses: number;
   runsFor: number;
   runsAgainst: number;
-  division: "Premier" | "Challenger";
+  division: LeagueTier;
   cash: number;
   wageBudget: number;
   payroll: number;
@@ -134,8 +164,11 @@ const teamStories = [
 ];
 
 const boardTargets = {
-  Premier: ["Fight for the pennant", "Stay clear of relegation", "Build a playoff-grade roster", "Finish in the top half"],
-  Challenger: ["Win promotion", "Make the promotion race", "Develop young talent", "Cut payroll without collapsing"],
+  Invitational: ["Learn to survive", "Build a legal lineup", "Keep every contract cheap", "Reach the promotion game"],
+  "Single A": ["Win more than you lose", "Turn prospects into starters", "Add professional staff", "Push for promotion"],
+  "Double A": ["Contend for promotion", "Build real pitching depth", "Grow the gate", "Hold a top-half place"],
+  "Triple A": ["Reach the Majors", "Develop two major-league players", "Win the pennant", "Survive the pressure"],
+  Majors: ["Fight for the pennant", "Stay clear of relegation", "Build a championship roster", "Finish in the top half"],
 };
 
 const staffNames = [
@@ -195,7 +228,7 @@ function contractFor(rng: Rng, role: PlayerRole, overall: number, age: number) {
 }
 
 function defaultFacilities(rng: Rng, division: Team["division"]): Facilities {
-  const base = division === "Premier" ? 2 : 1;
+  const base = 1 + Math.floor(tierIndex(division) / 2);
   return {
     battingCages: base + Math.floor(rng() * 2),
     bullpenMounds: base + Math.floor(rng() * 2),
@@ -317,35 +350,57 @@ function clampRating(value: number) {
   return Math.max(20, Math.min(99, Math.round(value)));
 }
 
-function scaleExpansionPlayer(rng: Rng, player: Player, budget: number): Player {
-  const target = budget <= 100 ? 22 + rng() * 7 : budget >= 1000 ? 40 + rng() * 12 : 32 + rng() * 10;
-  const current = Math.max(1, powerRankPlayer(player));
-  const factor = target / current;
-  const age = budget <= 100 ? 20 + Math.floor(rng() * 8) : player.age;
-  const scaled: Player = {
+function recalculatePlayer(player: Player): Player {
+  return {
     ...player,
-    age,
-    contact: player.role === "batter" ? clampRating(player.contact * factor) : player.contact,
-    power: player.role === "batter" ? clampRating(player.power * factor) : player.power,
-    eye: player.role === "batter" ? clampRating(player.eye * factor) : player.eye,
-    speed: clampRating(player.speed * (0.88 + factor * 0.12)),
-    fielding: clampRating(player.fielding * (0.88 + factor * 0.12)),
-    stuff: player.role === "pitcher" ? clampRating(player.stuff * factor) : player.stuff,
-    control: player.role === "pitcher" ? clampRating(player.control * factor) : player.control,
-    stamina: player.role === "pitcher" ? clampRating(player.stamina * factor) : player.stamina,
-    morale: Math.max(35, player.morale - (budget <= 100 ? 12 : budget >= 1000 ? 4 : 8)),
+    offense:
+      player.role === "batter"
+        ? Math.round(player.contact * 0.38 + player.power * 0.34 + player.eye * 0.28)
+        : Math.round(player.stuff * 0.22 + player.control * 0.18 + player.fielding * 0.12),
+    defense:
+      player.role === "pitcher"
+        ? Math.round(player.stuff * 0.38 + player.control * 0.34 + player.stamina * 0.18 + player.fielding * 0.1)
+        : Math.round(player.fielding * 0.72 + player.speed * 0.28),
   };
-  scaled.offense =
-    scaled.role === "batter"
-      ? Math.round(scaled.contact * 0.38 + scaled.power * 0.34 + scaled.eye * 0.28)
-      : Math.round(scaled.stuff * 0.22 + scaled.control * 0.18 + scaled.fielding * 0.12);
-  scaled.defense =
-    scaled.role === "pitcher"
-      ? Math.round(scaled.stuff * 0.38 + scaled.control * 0.34 + scaled.stamina * 0.18 + scaled.fielding * 0.1)
-      : Math.round(scaled.fielding * 0.72 + scaled.speed * 0.28);
+}
+
+function shiftPlayerAbility(player: Player, amount: number): Player {
+  const shifted = {
+    ...player,
+    contact: player.role === "batter" ? clampRating(player.contact + amount) : player.contact,
+    power: player.role === "batter" ? clampRating(player.power + amount) : player.power,
+    eye: player.role === "batter" ? clampRating(player.eye + amount) : player.eye,
+    speed: clampRating(player.speed + amount * 0.45),
+    fielding: clampRating(player.fielding + amount * 0.65),
+    stuff: player.role === "pitcher" ? clampRating(player.stuff + amount) : player.stuff,
+    control: player.role === "pitcher" ? clampRating(player.control + amount) : player.control,
+    stamina: player.role === "pitcher" ? clampRating(player.stamina + amount * 0.8) : player.stamina,
+    mastery: clampRating(player.mastery + amount * 0.7),
+  };
+  return recalculatePlayer(shifted);
+}
+
+function retargetPlayer(rng: Rng, player: Player, minOverall: number, maxOverall: number): Player {
+  const target = minOverall + Math.floor(rng() * (maxOverall - minOverall + 1));
+  let scaled = player;
+  for (let pass = 0; pass < 5; pass += 1) {
+    const delta = target - playerOverall(scaled);
+    if (Math.abs(delta) <= 1) break;
+    scaled = shiftPlayerAbility(scaled, delta);
+  }
   return {
     ...scaled,
-    ...contractFor(rng, scaled.role, powerRankPlayer(scaled), scaled.age),
+    ...contractFor(rng, scaled.role, playerOverall(scaled), scaled.age),
+  };
+}
+
+function scaleExpansionPlayer(rng: Rng, player: Player, budget: number): Player {
+  const range = budget <= 100 ? [26, 35] : budget >= 1000 ? [41, 49] : [34, 44];
+  const scaled = retargetPlayer(rng, player, range[0], range[1]);
+  return {
+    ...scaled,
+    age: budget <= 100 ? 20 + Math.floor(rng() * 8) : scaled.age,
+    morale: Math.max(35, scaled.morale - (budget <= 100 ? 12 : budget >= 1000 ? 4 : 8)),
   };
 }
 
@@ -361,23 +416,33 @@ function payroll(roster: Player[]) {
 
 export function buildSchedule(teams: Team[]) {
   const schedule: ScheduleGame[] = [];
-  let day = 1;
-  for (let round = 0; round < 5; round += 1) {
-    for (let index = 0; index < teams.length; index += 2) {
-      const away = teams[(index + round) % teams.length];
-      const home = teams[(index + round + 3) % teams.length];
-      if (away.id !== home.id) {
+  leagueTiers.forEach((division) => {
+    const divisionTeams = teams.filter((team) => team.division === division);
+    if (divisionTeams.length < 2 || divisionTeams.length % 2 !== 0) return;
+    let rotation = [...divisionTeams];
+
+    for (let round = 0; round < 12; round += 1) {
+      for (let index = 0; index < rotation.length / 2; index += 1) {
+        const left = rotation[index];
+        const right = rotation[rotation.length - 1 - index];
+        const swapHome = (round + index) % 2 === 1;
+        const away = swapHome ? right : left;
+        const home = swapHome ? left : right;
         schedule.push({
-          id: `d${day}-${away.id}-${home.id}`,
-          day,
+          id: `d${round + 1}-${away.id}-${home.id}`,
+          day: round + 1,
           awayId: away.id,
           homeId: home.id,
           label: `${away.abbreviation} at ${home.abbreviation}`,
         });
-        day += 1;
       }
+
+      const fixed = rotation[0];
+      const rotating = rotation.slice(1);
+      const last = rotating.pop();
+      rotation = last ? [fixed, last, ...rotating] : rotation;
     }
-  }
+  });
   return schedule;
 }
 
@@ -386,11 +451,13 @@ export function createLeague(seed = "night-ledger-1938"): League {
   const usedNames = new Set<string>();
   const teams: Team[] = teamNames(rng).map(([city, mascot], index) => {
     const id = city.toLowerCase().replace(/[^a-z]/g, "-");
+    const division = leagueTiers[Math.min(leagueTiers.length - 1, Math.floor(index / 4))];
+    const profile = tierProfiles[division];
     const hitterPositions = [...positions, "C", "IF", "IF", "OF", "OF"];
-    const roster = [
+    const roster = ([
       ...hitterPositions.map((position, playerIndex) => makeBatter(rng, id, playerIndex, position, usedNames)),
       ...Array.from({ length: 5 }, (_, pitcherIndex) => makePitcher(rng, id, pitcherIndex, usedNames)),
-    ];
+    ]).map((player) => retargetPlayer(rng, player, profile.minOverall, profile.maxOverall));
     const lineup = roster
       .filter((player) => player.role === "batter")
       .sort((left, right) => playerOverall(right) - playerOverall(left))
@@ -399,17 +466,16 @@ export function createLeague(seed = "night-ledger-1938"): League {
       .filter((player) => player.role === "pitcher")
       .sort((left, right) => playerOverall(right) - playerOverall(left));
     const [color, accent] = palettes[index % palettes.length];
-    const division = index < 4 ? "Premier" : "Challenger";
     const teamPayroll = payroll(roster);
-    const fanSupport = rating(rng, division === "Premier" ? 55 : 38, division === "Premier" ? 94 : 82);
-    const stadium = rating(rng, 42, 92);
+    const fanSupport = rating(rng, profile.fanMin, profile.fanMax);
+    const stadium = rating(rng, 24 + tierIndex(division) * 12, 48 + tierIndex(division) * 12);
 
     return {
       id,
       city,
       mascot,
       name: `${city} ${mascot}`,
-      abbreviation: mascot
+      abbreviation: `${city} ${mascot}`
         .split(" ")
         .map((part) => part[0])
         .join("")
@@ -422,7 +488,7 @@ export function createLeague(seed = "night-ledger-1938"): League {
       runsFor: 0,
       runsAgainst: 0,
       division,
-      cash: Math.round((division === "Premier" ? 5200 : 3100) + fanSupport * 34 + rng() * 1600),
+      cash: Math.round(profile.cashBase + fanSupport * (18 + tierIndex(division) * 5) + rng() * profile.cashBase * 0.35),
       wageBudget: Math.round(teamPayroll * (1.12 + rng() * 0.34)),
       payroll: teamPayroll,
       fanSupport,
@@ -432,11 +498,11 @@ export function createLeague(seed = "night-ledger-1938"): League {
       materials: defaultMaterials(rng),
       sponsor: rng() > 0.45 ? pick(rng, sponsorPool) : undefined,
       staff:
-        division === "Premier"
+        tierIndex(division) >= 2
           ? {
               assistant: makeStaff(rng, "assistant", 420),
               scout: makeStaff(rng, "scout", 320),
-              head: makeStaff(rng, "head", 520),
+              ...(tierIndex(division) >= 3 ? { head: makeStaff(rng, "head", 520) } : {}),
             }
           : {},
       boardTarget: pick(rng, boardTargets[division]),
@@ -450,10 +516,14 @@ export function createLeague(seed = "night-ledger-1938"): League {
   const sorted = [...teams].sort((left, right) => powerRank(right) - powerRank(left));
 
   const schedule = buildSchedule(teams);
-  const freeAgents = [
+  const freeAgents = ([
     ...Array.from({ length: 12 }, (_, index) => makeBatter(rng, "fa", index, pick(rng, positions), usedNames)),
     ...Array.from({ length: 6 }, (_, index) => makePitcher(rng, "fa", index, usedNames)),
-  ].sort((left, right) => playerOverall(right) - playerOverall(left));
+  ]).map((player, index) => {
+    const tier = leagueTiers[index % leagueTiers.length];
+    const profile = tierProfiles[tier];
+    return retargetPlayer(rng, player, profile.minOverall, profile.maxOverall);
+  }).sort((left, right) => playerOverall(right) - playerOverall(left));
   const chronicle = sorted.slice(0, 5).map((team, index) => {
     const player = pick(rng, team.lineup);
     return `Day ${index + 11}: ${team.name} scouts underline ${player.name}, "${player.nickname}", after ${player.note.toLowerCase()}`;
@@ -494,7 +564,7 @@ export function createExpansionTeam(seed: string, city: string, mascot: string, 
     city: cleanCity,
     mascot: cleanMascot,
     name: `${cleanCity} ${cleanMascot}`,
-    abbreviation: cleanMascot
+    abbreviation: `${cleanCity} ${cleanMascot}`
       .split(" ")
       .map((part) => part[0])
       .join("")
@@ -506,7 +576,7 @@ export function createExpansionTeam(seed: string, city: string, mascot: string, 
     losses: 0,
     runsFor: 0,
     runsAgainst: 0,
-    division: "Challenger",
+    division: "Invitational",
     cash: startingBudget,
     wageBudget: Math.max(startingBudget, Math.round(teamPayroll * 1.08)),
     payroll: teamPayroll,
@@ -526,10 +596,10 @@ export function createExpansionTeam(seed: string, city: string, mascot: string, 
       thread: 2,
     },
     staff: {},
-    boardTarget: "Survive the first season",
+    boardTarget: "Earn a place in Single A",
     roster,
     lineup,
     rotation,
-    story: "a blank ledger, a cheap bus, and a division table that does not care about romance",
+    story: "an invitational entry, a cheap bus, and four rungs of professional baseball overhead",
   };
 }

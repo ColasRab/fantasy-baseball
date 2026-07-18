@@ -68,6 +68,18 @@ export const teamSeeds = [
   ["Blackfen", "Millers"],
   ["Cinder Falls", "Pilots"],
   ["Holloway", "Ledger Kings"],
+  ["Ash Harbor", "Dockhands"],
+  ["Bellwick", "Owls"],
+  ["Copper Ridge", "Miners"],
+  ["Dunlow", "Turnstiles"],
+  ["Elm Crossing", "Conductors"],
+  ["Foxglove", "Watchmen"],
+  ["Gallow Field", "Haymakers"],
+  ["Highwater", "Lockkeepers"],
+  ["Ivory Junction", "Monarchs"],
+  ["Juniper City", "Nightjars"],
+  ["Kingsport", "Crown Nine"],
+  ["Marrow Bay", "Breakers"],
 ] as const;
 
 export const positions = ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"] as const;

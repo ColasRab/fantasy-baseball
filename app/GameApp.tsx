@@ -12,11 +12,11 @@ import {
   Hammer,
   Handshake,
   ListChecks,
+  LogOut,
   Megaphone,
   Pause,
   Play,
   Radio,
-  RotateCcw,
   SkipForward,
   TrendingUp,
   Trophy,
@@ -40,7 +40,13 @@ import {
   buildSchedule,
   createExpansionTeam,
   createLeague,
+  leagueTiers,
+  nextTier,
+  previousTier,
   sponsorPool,
+  tierIndex,
+  tierProfiles,
+  type LeagueTier,
   type Player,
   type ScheduleGame,
   type Sponsor,
@@ -124,6 +130,27 @@ const facilityNodes = [
 ] as const;
 
 type TabId = (typeof appTabs)[number]["id"];
+
+const primaryNavigation = [
+  { tab: "office" as TabId, label: "Office", icon: Building2, href: "/office", tabs: ["office"] as TabId[] },
+  { tab: "squad" as TabId, label: "Team", icon: ClipboardList, href: "/squad", tabs: ["squad", "staff", "training"] as TabId[] },
+  { tab: "market" as TabId, label: "Club", icon: DollarSign, href: "/market", tabs: ["market", "facilities", "sponsors"] as TabId[] },
+  { tab: "match" as TabId, label: "Match", icon: Radio, href: "/match", tabs: ["match"] as TabId[] },
+  { tab: "league" as TabId, label: "League", icon: BarChart3, href: "/league", tabs: ["season", "league", "news"] as TabId[] },
+];
+
+const contextualNavigation: Partial<Record<TabId, TabId[]>> = {
+  squad: ["squad", "staff", "training"],
+  staff: ["squad", "staff", "training"],
+  training: ["squad", "staff", "training"],
+  market: ["market", "facilities", "sponsors"],
+  facilities: ["market", "facilities", "sponsors"],
+  sponsors: ["market", "facilities", "sponsors"],
+  season: ["season", "league", "news"],
+  league: ["season", "league", "news"],
+  news: ["season", "league", "news"],
+};
+
 type TeamSelection = {
   lineupIds: string[];
   starterId: string;
@@ -196,7 +223,7 @@ type SavedGameState = {
   schedule?: ScheduleGame[];
 };
 
-const saveKey = "diamond-manager-gm-state-v6";
+const saveKey = "diamond-manager-gm-state-v7";
 const startingBudgetOptions: Array<{ value: StartingBudget; label: string; description: string }> = [
   { value: 100, label: "$100k", description: "Hard mode: bargain players, tiny gate, every wage matters." },
   { value: 500, label: "$500k", description: "Balanced climb: enough room for one plan, not enough for mistakes." },
@@ -210,7 +237,7 @@ const initialSeasonState: SeasonState = {
   seasonLength: 12,
   reputation: 18,
   phase: "season",
-  lastWeekSummary: ["Create a club, sign staff, pick a sponsor, and survive the Challenger table."],
+  lastWeekSummary: ["Enter the Invitational, build a legal roster, and begin the climb toward the Majors."],
 };
 
 function normalizeTeamInput(value: string) {
@@ -539,13 +566,17 @@ function resetTeamRecord(team: Team) {
 function normalizeOwnedLeagueTeams(teams: Team[], ownedTeamId: string | null) {
   if (!ownedTeamId || teams.length % 2 === 0) return teams;
   const removable =
-    [...teams].reverse().find((team) => team.id !== ownedTeamId && team.division === "Challenger") ??
+    [...teams].reverse().find((team) => team.id !== ownedTeamId && team.division === "Invitational") ??
     [...teams].reverse().find((team) => team.id !== ownedTeamId);
   return removable ? teams.filter((team) => team.id !== removable.id) : teams;
 }
 
-function scheduleIncludesTeam(schedule: ScheduleGame[], teamId: string | null) {
-  return Boolean(teamId && schedule.some((game) => game.awayId === teamId || game.homeId === teamId));
+function scheduleCoversTeamEachDay(schedule: ScheduleGame[], teamId: string | null) {
+  if (!teamId || !schedule.length) return false;
+  const days = [...new Set(schedule.map((game) => game.day))];
+  return days.length === initialSeasonState.seasonLength && days.every((day) =>
+    schedule.some((game) => game.day === day && (game.awayId === teamId || game.homeId === teamId)),
+  );
 }
 
 function StatPill({ label, value }: { label: string; value: number | string }) {
@@ -553,6 +584,21 @@ function StatPill({ label, value }: { label: string; value: number | string }) {
     <div className="stat-pill">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ProgressionRail({ team }: { team: Team }) {
+  const currentIndex = tierIndex(team.division);
+  return (
+    <div className="progression-rail" aria-label={`League progression. Current tier: ${team.division}`}>
+      {leagueTiers.map((tier, index) => (
+        <div className={`${index === currentIndex ? "is-current" : ""} ${index < currentIndex ? "is-cleared" : ""}`} key={tier}>
+          <span>{index + 1}</span>
+          <strong>{tier}</strong>
+          <small>{index === currentIndex ? "Current" : index < currentIndex ? "Cleared" : `${tierProfiles[tier].minOverall}-${tierProfiles[tier].maxOverall} OVR`}</small>
+        </div>
+      ))}
     </div>
   );
 }
@@ -601,18 +647,19 @@ function Sidebar({
       </div>
 
       <nav className="side-nav" aria-label="front office sections">
-        {appTabs.map((tab) => {
-          const Icon = tab.icon;
+        {primaryNavigation.map((section) => {
+          const Icon = section.icon;
+          const badge = navBadges[section.tab];
           return (
             <Link
-              className={tab.id === activeTab ? "is-active" : ""}
-              href={tab.href}
-              key={tab.id}
-              onClick={() => onTab(tab.id)}
+              className={section.tabs.includes(activeTab) ? "is-active" : ""}
+              href={section.href}
+              key={section.tab}
+              onClick={() => onTab(section.tab)}
             >
               <Icon size={17} />
-              <span>{tab.label}</span>
-              {navBadges[tab.id] ? <small>{navBadges[tab.id]}</small> : null}
+              <span>{section.label}</span>
+              {badge ? <small>{badge}</small> : null}
             </Link>
           );
         })}
@@ -638,6 +685,30 @@ function Sidebar({
   );
 }
 
+function ContextNavigation({ activeTab, onTab }: { activeTab: TabId; onTab: (tab: TabId) => void }) {
+  const tabs = contextualNavigation[activeTab];
+  if (!tabs) return null;
+
+  return (
+    <nav className="context-nav" aria-label="current section">
+      {tabs.map((tabId) => {
+        const tab = appTabs.find((candidate) => candidate.id === tabId);
+        if (!tab) return null;
+        return (
+          <Link
+            className={tab.id === activeTab ? "is-active" : ""}
+            href={tab.href}
+            key={tab.id}
+            onClick={() => onTab(tab.id)}
+          >
+            {tab.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
 function Header({
   day,
   team,
@@ -658,7 +729,7 @@ function Header({
       <div className="masthead">
         <div>
           <p className="eyebrow">Day {day} under stadium lights</p>
-          <h1>Front Office Ledger</h1>
+          <h1>Night Ledger</h1>
           <p className="team-story header-note">{nextGameStatus}: {nextGame}</p>
         </div>
         <div className="score-bug" aria-label="club finance summary">
@@ -670,7 +741,9 @@ function Header({
         <div className="account-bug">
           <span>{user ? user.email : "Guest manager"}</span>
           {user ? (
-            <button onClick={onSignOut} type="button">Sign out</button>
+            <button aria-label="Sign out" onClick={onSignOut} title="Sign out" type="button">
+              <LogOut size={16} />
+            </button>
           ) : (
             <Link href="/login">Sign in</Link>
           )}
@@ -694,7 +767,7 @@ function CreateClubView({ onCreateTeam }: { onCreateTeam: (city: string, mascot:
         <p className="eyebrow">New save</p>
         <h1>Create Club</h1>
         <p className="team-story">
-          Start from the bottom of the Challenger division. Choose the board budget first, then build around cheap contracts, no staff, and a very patient bus driver.
+          Begin in the Invitational with a roster capped below 50 OVR. Every promotion raises the talent, money, pressure, and size of the story.
         </p>
         <div className="dev-login">
           <label htmlFor="club-city">Club City</label>
@@ -728,7 +801,7 @@ function CreateClubView({ onCreateTeam }: { onCreateTeam: (city: string, mascot:
               </button>
             ))}
           </div>
-          <button disabled={!canSubmit} onClick={() => onCreateTeam(city, mascot, budget)} type="button">Join Challenger Division</button>
+          <button disabled={!canSubmit} onClick={() => onCreateTeam(city, mascot, budget)} type="button">Enter the Invitational</button>
         </div>
       </section>
     </main>
@@ -805,14 +878,9 @@ function StaffView({
             {staffMarket.map((candidate) => {
               const locked = (candidate.role === "batting" || candidate.role === "pitching") && !hasAssistant;
               const alreadyHired = Boolean(staff[candidate.role]);
-              return (
-                <button
-                  className="compact-player"
-                  disabled={locked || alreadyHired || team.cash < candidate.salary}
-                  key={`${candidate.role}-${candidate.name}`}
-                  onClick={() => onHireStaff(team, candidate)}
-                  type="button"
-                >
+              const affordable = team.cash >= candidate.salary;
+              const content = (
+                <>
                   <span className="compact-grade">
                     <strong>{candidate.rating}</strong>
                     {candidate.role.slice(0, 3).toUpperCase()}
@@ -823,8 +891,22 @@ function StaffView({
                       {staffRoleLabel(candidate.role)} / {candidate.specialty} / cost {money(candidate.salary)}
                     </small>
                   </span>
-                  <span className="compact-action">{locked ? "Locked" : alreadyHired ? "Filled" : "Hire"}</span>
+                  <span className="compact-action">{locked ? "Needs assistant" : alreadyHired ? "Filled" : affordable ? "Hire" : "Need cash"}</span>
+                </>
+              );
+              return !locked && !alreadyHired && affordable ? (
+                <button
+                  className="compact-player"
+                  key={`${candidate.role}-${candidate.name}`}
+                  onClick={() => onHireStaff(team, candidate)}
+                  type="button"
+                >
+                  {content}
                 </button>
+              ) : (
+                <div className="compact-player is-static" key={`${candidate.role}-${candidate.name}`}>
+                  {content}
+                </div>
               );
             })}
           </div>
@@ -865,6 +947,7 @@ function PostMatchReport({ impact }: { impact: MatchImpact }) {
 
 function OfficeView({
   team,
+  seasonState,
   nextGame,
   nextGameStatus,
   matchImpact,
@@ -873,6 +956,7 @@ function OfficeView({
   onNextDay,
 }: {
   team: Team;
+  seasonState: SeasonState;
   nextGame: string;
   nextGameStatus: string;
   matchImpact?: MatchImpact;
@@ -881,11 +965,10 @@ function OfficeView({
   onNextDay: () => void;
 }) {
   const wageRoom = team.wageBudget - team.payroll;
-  const tableHint =
-    team.division === "Premier"
-      ? "Bottom club drops into Challenger."
-      : "Top club earns promotion into Premier.";
-  const isFirstRun = team.wins + team.losses === 0;
+  const tableHint = team.division === "Majors"
+    ? "The pennant is the final target; last place drops to Triple A."
+    : `Win the table to reach ${nextTier(team.division)}.`;
+  const isFirstRun = seasonState.season === 1 && team.wins + team.losses === 0;
 
   return (
     <section className="view office-view">
@@ -896,6 +979,12 @@ function OfficeView({
         </div>
         <TeamMark team={team} />
       </div>
+
+      <div className="journey-heading">
+        <span>Season {seasonState.season}</span>
+        <strong>Road to the Majors</strong>
+      </div>
+      <ProgressionRail team={team} />
 
       <div className="office-home">
         <section className="ballpark-anchor">
@@ -923,6 +1012,12 @@ function OfficeView({
             <TrendingUp size={20} />
           </div>
           <p className="team-story">{nextGameStatus}. {tableHint} Board target: {team.boardTarget}.</p>
+          {seasonState.season > 1 && team.wins + team.losses === 0 ? (
+            <div className="season-opening">
+              <p className="eyebrow">Previously in the ledger</p>
+              {seasonState.lastWeekSummary.map((line) => <p key={line}>{line}</p>)}
+            </div>
+          ) : null}
           {matchImpact ? <PostMatchReport impact={matchImpact} /> : null}
           {isFirstRun ? (
             <div className="onboarding-card" aria-label="first manager checklist">
@@ -1109,6 +1204,7 @@ function FacilitiesView({
   onPurchaseNode: (team: Team, nodeId: string) => void;
   onCraftGear: (team: Team, gear: "bats" | "gloves" | "cleats" | "uniforms") => void;
 }) {
+  const [selectedFacility, setSelectedFacility] = useState<keyof Team["facilities"]>("battingCages");
   const facilities = [
     ["battingCages", "Batting Cages", "Offense training"],
     ["bullpenMounds", "Bullpen Mounds", "Pitcher defense"],
@@ -1116,6 +1212,9 @@ function FacilitiesView({
     ["filmRoom", "Film Room", "Mastery and scouting"],
     ["recoveryWing", "Recovery Wing", "Fatigue recovery"],
   ] as const;
+  const selectedFacilityDetails = facilities.find(([key]) => key === selectedFacility) ?? facilities[0];
+  const selectedFacilityCost = 500 + team.facilities[selectedFacility] * 240;
+  const craftingUnlocked = hasUpgrade(purchasedUpgrades, "crafting-bench");
 
   return (
     <section className="view facilities-view">
@@ -1134,20 +1233,20 @@ function FacilitiesView({
               <h3>Clubhouse Spine</h3>
             </div>
           </div>
-          <div className="compact-list">
-            {facilities.map(([key, label, note]) => (
-              <button className="compact-player" key={key} onClick={() => onUpgradeNamedFacility(team, key)} type="button">
-                <span className="compact-grade">
-                  <strong>Lv</strong>
-                  {team.facilities[key]}
-                </span>
-                <span className="compact-name">
-                  <strong>{label}</strong>
-                  <small>{note} / cost {money(500 + team.facilities[key] * 240)}</small>
-                </span>
-                <span className="compact-action">Upgrade</span>
-              </button>
-            ))}
+          <div className="facility-picker">
+            <label htmlFor="facility-upgrade">Choose facility</label>
+            <select id="facility-upgrade" onChange={(event) => setSelectedFacility(event.target.value as keyof Team["facilities"])} value={selectedFacility}>
+              {facilities.map(([key, label]) => (
+                <option key={key} value={key}>{label} / Lv {team.facilities[key]}</option>
+              ))}
+            </select>
+            <div className="facility-choice-summary">
+              <strong>{selectedFacilityDetails[1]}</strong>
+              <small>{selectedFacilityDetails[2]} / {money(selectedFacilityCost)}</small>
+            </div>
+            <button disabled={team.cash < selectedFacilityCost} onClick={() => onUpgradeNamedFacility(team, selectedFacility)} type="button">
+              {team.cash < selectedFacilityCost ? `Need ${money(selectedFacilityCost - team.cash)}` : "Upgrade facility"}
+            </button>
           </div>
         </section>
 
@@ -1162,18 +1261,27 @@ function FacilitiesView({
             {facilityNodes.map((node) => {
               const unlocked = team.facilities[node.facility] >= node.level;
               const purchased = hasUpgrade(purchasedUpgrades, node.id);
-              return (
+              const affordable = team.cash >= node.cost;
+              const content = (
+                <>
+                  <span>Lv {node.level}</span>
+                  <strong>{node.name}</strong>
+                  <small>{purchased ? "Purchased" : !unlocked ? `Upgrade ${node.facility} to Lv ${node.level}` : !affordable ? `Need ${money(node.cost - team.cash)}` : `${money(node.cost)} / ${node.effect}`}</small>
+                </>
+              );
+              return unlocked && !purchased && affordable ? (
                 <button
-                  className={`facility-node ${unlocked ? "is-unlocked" : "is-locked"} ${purchased ? "is-owned" : ""}`}
-                  disabled={!unlocked || purchased || team.cash < node.cost}
+                  className="facility-node is-unlocked"
                   key={node.id}
                   onClick={() => onPurchaseNode(team, node.id)}
                   type="button"
                 >
-                  <span>Lv {node.level}</span>
-                  <strong>{node.name}</strong>
-                  <small>{purchased ? "Purchased" : unlocked ? `${money(node.cost)} / ${node.effect}` : `Upgrade ${node.facility} to Lv ${node.level}`}</small>
+                  {content}
                 </button>
+              ) : (
+                <article className={`facility-node ${unlocked ? "is-unlocked" : "is-locked"} ${purchased ? "is-owned" : ""}`} key={node.id}>
+                  {content}
+                </article>
               );
             })}
           </div>
@@ -1186,30 +1294,25 @@ function FacilitiesView({
               <h3>Crafting Bench</h3>
             </div>
           </div>
-          {!hasUpgrade(purchasedUpgrades, "crafting-bench") ? (
+          {!craftingUnlocked ? (
             <div className="empty-scouting">Locked. Purchase Equipment Bench in the facility grid.</div>
-          ) : null}
-          <div className="compact-list">
-            {(["bats", "gloves", "cleats", "uniforms"] as const).map((gear) => (
-              <button
-                className="compact-player"
-                disabled={!hasUpgrade(purchasedUpgrades, "crafting-bench")}
-                key={gear}
-                onClick={() => onCraftGear(team, gear)}
-                type="button"
-              >
-                <span className="compact-grade">
-                  <strong>+1</strong>
-                  {gear === "bats" ? "OFF" : gear === "gloves" ? "DEF" : gear === "cleats" ? "SPD" : "MOR"}
-                </span>
-                <span className="compact-name">
-                  <strong>{gear}</strong>
-                  <small>Consumes lumber, leather, and thread from match rewards.</small>
-                </span>
-                <span className="compact-action">Craft</span>
-              </button>
-            ))}
-          </div>
+          ) : (
+            <div className="compact-list">
+              {(["bats", "gloves", "cleats", "uniforms"] as const).map((gear) => (
+                <button className="compact-player" key={gear} onClick={() => onCraftGear(team, gear)} type="button">
+                  <span className="compact-grade">
+                    <strong>+1</strong>
+                    {gear === "bats" ? "OFF" : gear === "gloves" ? "DEF" : gear === "cleats" ? "SPD" : "MOR"}
+                  </span>
+                  <span className="compact-name">
+                    <strong>{gear}</strong>
+                    <small>Consumes lumber, leather, and thread from match rewards.</small>
+                  </span>
+                  <span className="compact-action">Craft</span>
+                </button>
+              ))}
+            </div>
+          )}
         </section>
       </div>
     </section>
@@ -1280,24 +1383,15 @@ function SponsorsView({
 }
 
 function AbbrevStat({ abbreviation, label, value }: { abbreviation: string; label: string; value: number | string }) {
-  const [open, setOpen] = useState(false);
-
   return (
     <span
-      className={`abbrev-stat ${open ? "is-open" : ""}`}
-      onBlur={() => setOpen(false)}
-      onClick={() => setOpen((current) => !current)}
-      onFocus={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onMouseEnter={() => setOpen(true)}
-      role="button"
-      tabIndex={0}
+      className="abbrev-stat"
       aria-label={`${label}: ${value}`}
+      title={label}
     >
       <strong>
         {abbreviation} <span>{value}</span>
       </strong>
-      {open ? <small>{label}</small> : null}
     </span>
   );
 }
@@ -1420,19 +1514,13 @@ function CompactPlayerRow({
 function SquadView({
   team,
   selection,
-  freeAgents,
   onTogglePlayer,
   onAutoPick,
-  onSign,
-  onRelease,
 }: {
   team: Team;
   selection: TeamSelection;
-  freeAgents: Player[];
   onTogglePlayer: (team: Team, player: Player) => void;
   onAutoPick: (team: Team) => void;
-  onSign: (player: Player) => void;
-  onRelease: (team: Team, player: Player) => void;
 }) {
   const hitters = team.roster
     .filter((player) => player.role === "batter")
@@ -1446,7 +1534,6 @@ function SquadView({
     .filter((player): player is Player => Boolean(player));
   const benchHitters = hitters.filter((player) => !lineupSet.has(player.id));
   const starter = pitchers.find((player) => player.id === selection.starterId) ?? pitchers[0];
-  const market = freeAgents.slice(0, 9);
   const staff = team.staff ?? {};
   const assistantLineup = recommendedLineup(team);
   const assistantStarter = recommendedStarter(team);
@@ -1509,7 +1596,7 @@ function SquadView({
         <section className="lineup-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Step 1</p>
+              <p className="eyebrow">Lineup</p>
               <h3>Starting Lineup</h3>
             </div>
             <ListChecks size={20} />
@@ -1518,17 +1605,14 @@ function SquadView({
             {Array.from({ length: 9 }, (_, index) => {
               const player = selectedHitters[index];
               return (
-                <button
+                <div
                   className={`lineup-slot ${player ? "is-filled" : ""}`}
-                  disabled={!player}
                   key={`${team.id}-slot-${index}`}
-                  onClick={() => player && onTogglePlayer(team, player)}
-                  type="button"
                 >
                   <span>{index + 1}</span>
                   <strong>{player?.name ?? "Empty slot"}</strong>
-                  <small>{player ? `${player.position} / ${letterGrade(playerOverall(player))} ${playerOverall(player)}` : "Pick a bench hitter"}</small>
-                </button>
+                  <small>{player ? `${player.position} / ${letterGrade(playerOverall(player))} ${playerOverall(player)}` : "Pick an available hitter"}</small>
+                </div>
               );
             })}
           </div>
@@ -1550,8 +1634,8 @@ function SquadView({
         <section className="pool-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Step 2</p>
-              <h3>Pick Players</h3>
+              <p className="eyebrow">Choices</p>
+              <h3>Available Players</h3>
             </div>
           </div>
 
@@ -1584,45 +1668,18 @@ function SquadView({
             </div>
           </div>
 
-          <div className="pool-section">
-            <h4>Transfer Market</h4>
-            <div className="compact-list">
-              {market.map((player) => (
-                <button
-                  className="compact-player"
-                  disabled={team.cash < player.value || team.payroll + player.salary > team.wageBudget}
-                  key={player.id}
-                  onClick={() => onSign(player)}
-                  type="button"
-                >
-                  <span className="compact-grade">
-                    <strong>{letterGrade(playerOverall(player))}</strong>
-                    {playerOverall(player)}
-                  </span>
-                  <span className="compact-name">
-                    <strong>{player.name}</strong>
-                    <small>{player.position} / fee {money(player.value)} / wage {money(player.salary)}</small>
-                  </span>
-                  <span className="compact-action">Sign</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </section>
 
         <section className="scout-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Step 3</p>
-              <h3>Scout Cards</h3>
+              <p className="eyebrow">Snapshot</p>
+              <h3>Current Core</h3>
             </div>
           </div>
           <div className="featured-cards">
             {[starter, ...selectedHitters.slice(0, 2)].map((player) => (
-              <div className="release-wrap" key={player.id}>
-                <PlayerCard player={player} selected />
-                <button onClick={() => onRelease(team, player)} type="button">Release</button>
-              </div>
+              <PlayerCard key={player.id} player={player} selected />
             ))}
           </div>
         </section>
@@ -1921,7 +1978,6 @@ function MatchView({
   gameStatus,
   onNext,
   onSkip,
-  onReset,
   onRecordWeek,
 }: {
   game: ReturnType<typeof simulateGame>;
@@ -1930,7 +1986,6 @@ function MatchView({
   gameStatus: "scheduled" | "in-progress" | "completed";
   onNext: () => void;
   onSkip: () => void;
-  onReset: () => void;
   onRecordWeek: () => void;
 }) {
   const [isPlaying, setIsPlaying] = useState(true);
@@ -2004,6 +2059,24 @@ function MatchView({
           <span>{event.ticker} / {isComplete ? `${game.headline} / ${game.final}` : "Match in progress"} / {event.ticker}</span>
         </div>
 
+        {isComplete ? (
+          <div className="match-complete-flag match-toolbar">Final recorded</div>
+        ) : (
+          <div className="controls match-toolbar">
+            <button aria-label={isPlaying ? "Pause simulation" : "Resume simulation"} onClick={() => setIsPlaying((current) => !current)} title={isPlaying ? "Pause simulation" : "Resume simulation"} type="button">
+              {isPlaying ? <Pause size={17} /> : <Play size={17} />}
+            </button>
+            <button onClick={onSkip} title="Simulate the rest of the match" type="button">
+              <SkipForward size={17} />
+              <span>To Final</span>
+            </button>
+            <button aria-label={`Simulation speed ${simSpeed === "normal" ? "1x" : "4x"}`} onClick={() => setSimSpeed((current) => (current === "normal" ? "fast" : "normal"))} title="Change simulation speed" type="button">
+              <Radio size={17} />
+              <span>{simSpeed === "normal" ? "1x" : "4x"}</span>
+            </button>
+          </div>
+        )}
+
         {headCoach && headCoachPlan ? (
           <div className="coach-note is-active gameplan-note">
             <span>Head Coach Gameplan</span>
@@ -2037,28 +2110,6 @@ function MatchView({
                 </article>
               ))}
             </div>
-            <div className="controls">
-              <button onClick={() => setIsPlaying((current) => !current)} type="button">
-                {isPlaying ? <Pause size={17} /> : <Play size={17} />}
-                <span>{isPlaying ? "Pause" : "Play"}</span>
-              </button>
-              <button disabled={isComplete} onClick={onNext} type="button">
-                <SkipForward size={17} />
-                <span>Step</span>
-              </button>
-              <button onClick={onSkip} type="button">
-                <SkipForward size={17} />
-                <span>Final</span>
-              </button>
-              <button onClick={onReset} type="button">
-                <RotateCcw size={17} />
-                <span>Reset</span>
-              </button>
-              <button onClick={() => setSimSpeed((current) => (current === "normal" ? "fast" : "normal"))} type="button">
-                <Radio size={17} />
-                <span>{simSpeed === "normal" ? "Normal" : "Fast"}</span>
-              </button>
-            </div>
           </aside>
         </div>
       </div>
@@ -2090,33 +2141,23 @@ function ChronicleView({ entries, game }: { entries: string[]; game: ReturnType<
 
 function LeagueView({ teams, seasonState, team }: { teams: Team[]; seasonState: SeasonState; team: Team }) {
   const standings = [...teams].sort((left, right) => right.wins - left.wins || left.losses - right.losses || right.runsFor - left.runsFor);
-  const divisions: Record<Team["division"], Team[]> = {
-    Premier: standings.filter((candidate) => candidate.division === "Premier"),
-    Challenger: standings.filter((candidate) => candidate.division === "Challenger"),
-  };
-  const statLeaders = [...teams.flatMap((candidate) => candidate.lineup.map((player) => ({ ...player, team: candidate.abbreviation })))]
-    .sort((left, right) => playerOverall(right) - playerOverall(left))
-    .slice(0, 8);
-  const isOffseason = seasonState.phase === "offseason";
+  const divisions = Object.fromEntries(
+    leagueTiers.map((division) => [division, standings.filter((candidate) => candidate.division === division)]),
+  ) as Record<LeagueTier, Team[]>;
   const [activeDivision, setActiveDivision] = useState<Team["division"]>(team.division);
-  const [activeTile, setActiveTile] = useState("premier-top");
 
   useEffect(() => {
     setActiveDivision(team.division);
   }, [team.division]);
 
-  const overviewTiles = [
-    { id: "premier-top", label: "Premier Top Half", teams: divisions.Premier.slice(0, 2) },
-    { id: "premier-bottom", label: "Premier Bottom Half", teams: divisions.Premier.slice(2) },
-    { id: "challenger-top", label: "Challenger Top Half", teams: divisions.Challenger.slice(0, 2) },
-    { id: "challenger-bottom", label: "Challenger Bottom Half", teams: divisions.Challenger.slice(2) },
-  ];
-  const activeTileTeams = overviewTiles.find((tile) => tile.id === activeTile)?.teams ?? overviewTiles[0].teams;
   const activeDivisionTeams = divisions[activeDivision];
-  const divisionOrder: Array<Team["division"]> = team.division === "Premier" ? ["Premier", "Challenger"] : ["Challenger", "Premier"];
+  const statLeaders = activeDivisionTeams
+    .flatMap((candidate) => candidate.lineup.map((player) => ({ ...player, team: candidate.abbreviation })))
+    .sort((left, right) => playerOverall(right) - playerOverall(left))
+    .slice(0, 8);
   const moveStatus = (candidate: Team, index: number, list: Team[]) => {
-    if (candidate.division === "Premier" && index === list.length - 1) return "Relegation";
-    if (candidate.division === "Challenger" && index === 0) return "Promotion";
+    if (candidate.division !== "Majors" && index === 0) return `To ${nextTier(candidate.division)}`;
+    if (candidate.division !== "Invitational" && index === list.length - 1) return `To ${previousTier(candidate.division)}`;
     return "";
   };
 
@@ -2137,7 +2178,7 @@ function LeagueView({ teams, seasonState, team }: { teams: Team[]; seasonState: 
         </thead>
         <tbody>
           {list.map((candidate, index) => (
-            <tr className={`${candidate.id === team.id ? "is-user-team" : ""} ${moveStatus(candidate, index, list) === "Promotion" ? "is-promotion" : ""} ${moveStatus(candidate, index, list) === "Relegation" ? "is-relegation" : ""}`} key={candidate.id}>
+            <tr className={`${candidate.id === team.id ? "is-user-team" : ""} ${index === 0 && candidate.division !== "Majors" ? "is-promotion" : ""} ${index === list.length - 1 && candidate.division !== "Invitational" ? "is-relegation" : ""}`} key={candidate.id}>
               <th>{candidate.name}</th>
               <td>{teamOverall(candidate)}</td>
               <td>{candidate.wins}</td>
@@ -2157,98 +2198,44 @@ function LeagueView({ teams, seasonState, team }: { teams: Team[]; seasonState: 
       <div className="section-title">
         <div>
           <p className="eyebrow">League office</p>
-          <h2>Standings and Leaders</h2>
+          <h2>Road to the Majors</h2>
         </div>
+        <StatPill label="Season" value={seasonState.season} />
       </div>
-
-      {isOffseason ? (
-        <div className="league-overview">
-          <div className="league-tile-grid">
-            {overviewTiles.map((tile) => {
-              const topTeam = tile.teams[0];
-              const bottomTeam = tile.teams[tile.teams.length - 1];
-              return (
-                <button
-                  className={`league-tile ${activeTile === tile.id ? "is-active" : ""}`}
-                  key={tile.id}
-                  onClick={() => setActiveTile(tile.id)}
-                  type="button"
-                >
-                  <strong>{tile.label}</strong>
-                  <span>{tile.teams.length} clubs</span>
-                  <small>
-                    {topTeam ? `${topTeam.name}${moveStatus(topTeam, 0, tile.teams) ? ` (${moveStatus(topTeam, 0, tile.teams)})` : ""}` : "No clubs"}
-                    {bottomTeam && bottomTeam !== topTeam ? ` / ${bottomTeam.name}${moveStatus(bottomTeam, tile.teams.length - 1, tile.teams) ? ` (${moveStatus(bottomTeam, tile.teams.length - 1, tile.teams)})` : ""}` : ""}
-                  </small>
-                </button>
-              );
-            })}
-          </div>
-          <div className="stats-columns">
-            {renderStandingsTable(activeTileTeams, overviewTiles.find((tile) => tile.id === activeTile)?.label ?? "Overview")}
-            <table className="ledger-table leaders">
-              <caption>Active Player Leaders</caption>
-              <thead>
-                <tr>
-                  <th>Player</th>
-                  <th>Club</th>
-                  <th>OVR</th>
-                  <th>Grade</th>
-                </tr>
-              </thead>
-              <tbody>
-                {statLeaders.map((player) => (
-                  <tr key={player.id}>
-                    <th>{player.name}</th>
-                    <td>{player.team}</td>
-                    <td>{playerOverall(player)}</td>
-                    <td>{letterGrade(playerOverall(player))}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : (
-        <div className="stats-columns">
-          <div>
-            <div className="division-switcher">
-              {divisionOrder.map((division) => (
-                <button
-                  className={activeDivision === division ? "is-active" : ""}
-                  key={division}
-                  onClick={() => setActiveDivision(division)}
-                  type="button"
-                >
-                  {division}{division === team.division ? " / Your division" : ""}
-                </button>
-              ))}
-            </div>
-            {renderStandingsTable(activeDivisionTeams, `${activeDivision} Division`)}
-          </div>
-          <table className="ledger-table leaders">
-            <caption>Active Player Leaders</caption>
-            <thead>
-              <tr>
-                <th>Player</th>
-                <th>Club</th>
-                <th>OVR</th>
-                <th>Grade</th>
+      <ProgressionRail team={team} />
+      <div className="division-picker">
+        <label htmlFor="division-view">View league</label>
+        <select id="division-view" onChange={(event) => setActiveDivision(event.target.value as LeagueTier)} value={activeDivision}>
+          {leagueTiers.map((division) => (
+            <option key={division} value={division}>{division}{division === team.division ? " / Your league" : ""}</option>
+          ))}
+        </select>
+        <span>{tierProfiles[activeDivision].minOverall}-{tierProfiles[activeDivision].maxOverall} expected OVR</span>
+      </div>
+      <div className="stats-columns">
+        {renderStandingsTable(activeDivisionTeams, `${activeDivision} League`)}
+        <table className="ledger-table leaders">
+          <caption>{activeDivision} Player Leaders</caption>
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th>Club</th>
+              <th>OVR</th>
+              <th>Grade</th>
+            </tr>
+          </thead>
+          <tbody>
+            {statLeaders.map((player) => (
+              <tr key={player.id}>
+                <th>{player.name}</th>
+                <td>{player.team}</td>
+                <td>{playerOverall(player)}</td>
+                <td>{letterGrade(playerOverall(player))}</td>
               </tr>
-            </thead>
-            <tbody>
-              {statLeaders.map((player) => (
-                <tr key={player.id}>
-                  <th>{player.name}</th>
-                  <td>{player.team}</td>
-                  <td>{playerOverall(player)}</td>
-                  <td>{letterGrade(playerOverall(player))}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }
@@ -2258,16 +2245,12 @@ function SeasonView({
   teams,
   seasonState,
   nextGame,
-  canRecordWeek,
-  onAdvanceWeek,
   onFinishSeason,
 }: {
   team: Team;
   teams: Team[];
   seasonState: SeasonState;
   nextGame: string;
-  canRecordWeek: boolean;
-  onAdvanceWeek: () => void;
   onFinishSeason: () => void;
 }) {
   const divisionTable = [...teams]
@@ -2290,7 +2273,7 @@ function SeasonView({
         <section className="office-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Next decision</p>
+              <p className="eyebrow">Current fixture</p>
               <h3>{nextGame}</h3>
             </div>
             <CalendarDays size={20} />
@@ -2298,10 +2281,11 @@ function SeasonView({
           <p className="team-story">
             Each week resolves the league match, pays wages, adds gate income, checks sponsor bonuses, and moves the table.
           </p>
-          <div className="office-actions">
-            <button disabled={seasonReady} onClick={onAdvanceWeek} type="button">Advance Day</button>
-            <button disabled={!seasonReady} onClick={onFinishSeason} type="button">Resolve Promotion</button>
-          </div>
+          {seasonReady ? (
+            <div className="office-actions">
+              <button onClick={onFinishSeason} type="button">Resolve Promotion</button>
+            </div>
+          ) : null}
         </section>
 
         <section className="office-panel">
@@ -2315,7 +2299,7 @@ function SeasonView({
           <div className="finance-lines">
             <span>Position <strong>#{rank || "-"}</strong></span>
             <span>Record <strong>{team.wins}-{team.losses}</strong></span>
-            <span>Goal <strong>{team.division === "Challenger" ? "Top club promotes" : "Bottom club relegates"}</strong></span>
+            <span>Goal <strong>{team.division === "Majors" ? "Win the pennant" : `Finish first for ${nextTier(team.division)}`}</strong></span>
             <span>Cash <strong>{money(team.cash)}</strong></span>
           </div>
         </section>
@@ -2353,7 +2337,13 @@ function loadSavedState(user?: AuthUser | null): SavedGameState | null {
 }
 
 function isSavedGamePayload(value: SavedGamePayload | null): value is SavedGameState {
-  return Boolean(value && Array.isArray(value.teams) && Array.isArray(value.freeAgents) && value.selections);
+  return Boolean(
+    value &&
+    Array.isArray(value.teams) &&
+    value.teams.every((team) => leagueTiers.includes((team as Team).division)) &&
+    Array.isArray(value.freeAgents) &&
+    value.selections,
+  );
 }
 
 export default function GameApp({ initialTab = "office" }: { initialTab?: TabId }) {
@@ -2373,7 +2363,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
   const [purchasedUpgrades, setPurchasedUpgrades] = useState<string[]>(() => initialSaved?.purchasedUpgrades ?? []);
   const [gameRecords, setGameRecords] = useState<Record<string, StoredGameRecord>>(() => initialSaved?.gameRecords ?? {});
   const [schedule, setSchedule] = useState<ScheduleGame[]>(() =>
-    initialSaved?.schedule && scheduleIncludesTeam(initialSaved.schedule, initialSaved.ownedTeamId ?? null)
+    initialSaved?.schedule && scheduleCoversTeamEachDay(initialSaved.schedule, initialSaved.ownedTeamId ?? null)
       ? initialSaved.schedule
       : buildSchedule(initialTeams),
   );
@@ -2478,7 +2468,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
             setScoutingState(localSave.scoutingState ?? initialScoutingState);
             setPurchasedUpgrades(localSave.purchasedUpgrades ?? []);
             setGameRecords(localSave.gameRecords ?? {});
-            setSchedule(localSave.schedule && scheduleIncludesTeam(localSave.schedule, localSave.ownedTeamId ?? null) ? localSave.schedule : buildSchedule(normalizedTeams));
+            setSchedule(localSave.schedule && scheduleCoversTeamEachDay(localSave.schedule, localSave.ownedTeamId ?? null) ? localSave.schedule : buildSchedule(normalizedTeams));
           }
         }
         setHasHydratedRemote(true);
@@ -2497,7 +2487,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
         setScoutingState((remoteSave.scoutingState as ScoutingState | undefined) ?? initialScoutingState);
         setPurchasedUpgrades(remoteSave.purchasedUpgrades ?? []);
         setGameRecords((remoteSave as SavedGameState).gameRecords ?? {});
-        setSchedule((remoteSave as SavedGameState).schedule && scheduleIncludesTeam((remoteSave as SavedGameState).schedule ?? [], remoteSave.ownedTeamId ?? null) ? (remoteSave as SavedGameState).schedule! : buildSchedule(normalizedTeams));
+        setSchedule((remoteSave as SavedGameState).schedule && scheduleCoversTeamEachDay((remoteSave as SavedGameState).schedule ?? [], remoteSave.ownedTeamId ?? null) ? (remoteSave as SavedGameState).schedule! : buildSchedule(normalizedTeams));
       } else {
         const localSave = loadSavedState(remoteUser);
         if (localSave) {
@@ -2510,7 +2500,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
           setScoutingState(localSave.scoutingState ?? initialScoutingState);
           setPurchasedUpgrades(localSave.purchasedUpgrades ?? []);
           setGameRecords(localSave.gameRecords ?? {});
-          setSchedule(localSave.schedule && scheduleIncludesTeam(localSave.schedule, localSave.ownedTeamId ?? null) ? localSave.schedule : buildSchedule(normalizedTeams));
+          setSchedule(localSave.schedule && scheduleCoversTeamEachDay(localSave.schedule, localSave.ownedTeamId ?? null) ? localSave.schedule : buildSchedule(normalizedTeams));
         }
       }
       setHasHydratedRemote(true);
@@ -2541,7 +2531,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     setScoutingState(guestSave?.scoutingState ?? initialScoutingState);
     setPurchasedUpgrades(guestSave?.purchasedUpgrades ?? []);
     setGameRecords(guestSave?.gameRecords ?? {});
-    setSchedule(guestSave?.schedule && scheduleIncludesTeam(guestSave.schedule, guestSave.ownedTeamId ?? null) ? guestSave.schedule : buildSchedule(guestTeams));
+    setSchedule(guestSave?.schedule && scheduleCoversTeamEachDay(guestSave.schedule, guestSave.ownedTeamId ?? null) ? guestSave.schedule : buildSchedule(guestTeams));
   }
 
   function createOwnedTeam(city: string, mascot: string, budget: StartingBudget) {
@@ -2550,7 +2540,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     if (validateTeamNamePart(cleanCity, "Club city") || validateTeamNamePart(cleanMascot, "Club nickname")) return;
     const team = createExpansionTeam(authUser?.email ?? "guest", cleanCity, cleanMascot, budget);
     const cpuTeams = league.teams.map(resetTeamRecord).filter((candidate) => candidate.id !== team.id);
-    const removableCpu = [...cpuTeams].reverse().find((candidate) => candidate.division === "Challenger") ?? cpuTeams[cpuTeams.length - 1];
+    const removableCpu = [...cpuTeams].reverse().find((candidate) => candidate.division === "Invitational") ?? cpuTeams[cpuTeams.length - 1];
     const freshTeams = cpuTeams.filter((candidate) => candidate.id !== removableCpu?.id);
     const seasonTeams = [team, ...freshTeams];
     setTeams(seasonTeams);
@@ -2946,7 +2936,15 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
     setScoutingState((current) => ({ ...current, isSearching: true, activeFocus: focus }));
 
     window.setTimeout(() => {
-      const available = freeAgents.filter((player) => !scoutingState.foundIds.includes(player.id));
+      const profile = tierProfiles[team.division];
+      const ceiling = focus === "rising"
+        ? tierProfiles[nextTier(team.division)].maxOverall
+        : profile.maxOverall + (focus === "veteran" ? 5 : focus === "college" ? 3 : 0);
+      const floor = Math.max(20, profile.minOverall - (focus === "local" ? 8 : 3));
+      const available = freeAgents.filter((player) => {
+        const overall = playerOverall(player);
+        return !scoutingState.foundIds.includes(player.id) && overall >= floor && overall <= ceiling;
+      });
       const sorted =
         focus === "rising"
           ? [...available].sort((left, right) => playerOverall(right) - playerOverall(left))
@@ -3061,7 +3059,7 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
       ...current,
       day: current.day + 1,
       week: current.week + 1,
-      phase: current.day >= schedule.length ? "offseason" : current.phase,
+      phase: current.day >= Math.max(...schedule.map((game) => game.day)) ? "offseason" : current.phase,
       lastWeekSummary: summaries.length
         ? summaries.slice(0, 3)
         : [`Day ${current.day} advanced with no scheduled games.`],
@@ -3076,33 +3074,69 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
       .filter((team) => team.division === selectedTeam.division)
       .sort((left, right) => right.wins - left.wins || left.losses - right.losses || right.runsFor - left.runsFor);
     const rank = divisionTeams.findIndex((team) => team.id === selectedTeam.id) + 1;
-    const promotes = selectedTeam.division === "Challenger" && rank === 1;
-    const relegates = selectedTeam.division === "Premier" && rank === divisionTeams.length;
-    const nextDivision = promotes ? "Premier" : relegates ? "Challenger" : selectedTeam.division;
+    const promotes = selectedTeam.division !== "Majors" && rank === 1;
+    const relegates = selectedTeam.division !== "Invitational" && rank === divisionTeams.length;
+    const wonMajors = selectedTeam.division === "Majors" && rank === 1;
+    const destination = promotes ? nextTier(selectedTeam.division) : relegates ? previousTier(selectedTeam.division) : selectedTeam.division;
+    const counterpart = promotes
+      ? [...managedTeams]
+        .filter((team) => team.division === destination && team.id !== selectedTeam.id)
+        .sort((left, right) => left.wins - right.wins || right.losses - left.losses)[0]
+      : relegates
+        ? [...managedTeams]
+          .filter((team) => team.division === destination && team.id !== selectedTeam.id)
+          .sort((left, right) => right.wins - left.wins || left.losses - right.losses)[0]
+        : undefined;
+    const reward = promotes
+      ? tierProfiles[selectedTeam.division].promotionReward
+      : wonMajors
+        ? tierProfiles.Majors.promotionReward
+        : relegates
+          ? -Math.round(tierProfiles[destination].promotionReward * 0.3)
+          : 350 + tierIndex(selectedTeam.division) * 300;
 
-    setTeams((current) =>
-      current.map((candidate) =>
-        candidate.id === selectedTeam.id
-          ? {
-            ...candidate,
-            division: nextDivision,
-            cash: candidate.cash + (promotes ? 1200 : relegates ? -500 : 350),
-            fanSupport: Math.max(1, Math.min(99, candidate.fanSupport + (promotes ? 8 : relegates ? -8 : 2))),
-            roster: candidate.roster.map((player) => ({ ...player, fatigue: Math.max(0, player.fatigue - 18) })),
-          }
-          : candidate,
-      ),
-    );
+    const nextTeams = managedTeams.map((candidate) => {
+      if (counterpart && candidate.id === counterpart.id) {
+        return resetTeamRecord({ ...candidate, division: selectedTeam.division });
+      }
+      if (candidate.id !== selectedTeam.id) return resetTeamRecord(candidate);
+      const restedRoster = candidate.roster.map((player) => ({ ...player, fatigue: Math.max(0, player.fatigue - 22) }));
+      return resetTeamRecord(withPayroll({
+        ...candidate,
+        division: destination,
+        cash: Math.max(0, candidate.cash + reward),
+        wageBudget: Math.max(candidate.wageBudget, Math.round(candidate.payroll * (1.12 + tierIndex(destination) * 0.05))),
+        fanSupport: clampScore(candidate.fanSupport + (promotes ? 9 : wonMajors ? 7 : relegates ? -7 : 2), 1, 99),
+        boardTarget: destination === "Majors" ? "Win the pennant" : `Earn a place in ${nextTier(destination)}`,
+        roster: restedRoster,
+        lineup: candidate.lineup.map((player) => restedRoster.find((rested) => rested.id === player.id) ?? player),
+        rotation: candidate.rotation.map((player) => restedRoster.find((rested) => rested.id === player.id) ?? player),
+      }));
+    });
+
+    setTeams(nextTeams);
+    setSchedule(buildSchedule(nextTeams));
+    setGameRecords({});
+    setEventIndex(0);
     setSeasonState((current) => ({
-      day: current.day,
-      season: current.season,
-      week: current.week,
+      day: 1,
+      season: current.season + 1,
+      week: 1,
       seasonLength: current.seasonLength,
-      reputation: Math.max(1, current.reputation + (promotes ? 10 : relegates ? -10 : 3)),
-      phase: "offseason",
+      reputation: Math.max(1, current.reputation + (promotes ? 10 : wonMajors ? 12 : relegates ? -7 : 3)),
+      phase: "season",
       lastWeekSummary: [
-        promotes ? "Promotion secured. The club moves into Premier." : relegates ? "Relegation confirmed. The club drops into Challenger." : "Season complete. The board keeps the project alive.",
-        `Final table position: #${rank || "-"}. New target: ${nextDivision === "Premier" ? "survive the top division" : "fight for promotion"}.`,
+        promotes
+          ? `Promotion secured. ${selectedTeam.name} enters ${destination}.`
+          : relegates
+            ? `Relegation confirmed. The club returns to ${destination}.`
+            : wonMajors
+              ? "The pennant belongs to your club. The league now measures itself against you."
+              : `Season complete in ${selectedTeam.division}. The climb continues.`,
+        `Final position: #${rank || "-"}. New season budget change: ${signedMoney(reward)}.`,
+        destination === "Majors"
+          ? "The Majors have no higher rung, only pennants and consequences."
+          : `Next milestone: finish first in ${destination} to reach ${nextTier(destination)}.`,
       ],
     }));
     setActiveTab("office");
@@ -3115,10 +3149,6 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
 
   function skipGame() {
     finalizeCurrentGame();
-  }
-
-  function resetGame() {
-    setEventIndex(0);
   }
 
   const discoveredProspects = freeAgents.filter((player) => scoutingState.foundIds.includes(player.id));
@@ -3181,9 +3211,12 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
           nextGameStatus={currentRecord.status === "completed" ? "Completed" : currentRecord.status === "in-progress" ? "In progress" : "Scheduled"}
         />
 
+        <ContextNavigation activeTab={activeTab} onTab={setActiveTab} />
+
         {activeTab === "office" ? (
           <OfficeView
             team={selectedTeam}
+            seasonState={seasonState}
             nextGame={gameResultSummary(currentRecord)}
             nextGameStatus={currentRecord.status === "completed" ? "Completed" : currentRecord.status === "in-progress" ? "In progress" : "Scheduled"}
             matchImpact={currentMatchImpact}
@@ -3197,11 +3230,8 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
           <SquadView
             team={selectedTeam}
             selection={selectedChoice}
-            freeAgents={freeAgents}
             onTogglePlayer={togglePlayer}
             onAutoPick={autoPick}
-            onSign={signPlayer}
-            onRelease={releasePlayer}
           />
         ) : null}
         {activeTab === "training" ? <TrainingView team={selectedTeam} onTrainPlayer={trainPlayer} onRunCoachWeek={runCoachWeek} /> : null}
@@ -3237,7 +3267,6 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
             gameStatus={currentRecord.status}
             onNext={nextEvent}
             onRecordWeek={finalizeCurrentGame}
-            onReset={resetGame}
             onSkip={skipGame}
           />
         ) : null}
@@ -3247,8 +3276,6 @@ export default function GameApp({ initialTab = "office" }: { initialTab?: TabId 
             teams={managedTeams}
             seasonState={seasonState}
             nextGame={gameResultSummary(currentRecord)}
-            canRecordWeek={eventIndex >= game.events.length - 1}
-            onAdvanceWeek={advanceDay}
             onFinishSeason={finishSeason}
           />
         ) : null}
